@@ -68,6 +68,18 @@
 #include <shlobj.h>
 #endif
 
+#ifdef WIN32
+#include <ctype.h>
+#include <winsock2.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#include <io.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
+
 #include <event2/dns.h>
 #include <event2/dns_struct.h>
 #include <event2/dns_compat.h>
@@ -87,17 +99,6 @@
 #include "ipv6-internal.h"
 #include "util-internal.h"
 #include "evthread-internal.h"
-#ifdef WIN32
-#include <ctype.h>
-#include <winsock2.h>
-#include <windows.h>
-#include <iphlpapi.h>
-#include <io.h>
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#endif
 
 #ifdef _EVENT_HAVE_NETINET_IN6_H
 #include <netinet/in6.h>
