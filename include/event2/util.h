@@ -207,7 +207,7 @@ extern "C" {
 #define ev_socklen_t socklen_t
 #endif
 
-#ifdef HAVE_AIX_SOCKADDR_STORAGE
+#ifdef _EVENT_HAVE_AIX_SOCKADDR_STORAGE
 #define ss_family __ss_family
 #endif
 
