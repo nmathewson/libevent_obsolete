@@ -203,11 +203,18 @@ AC_CHECK_FUNCS(gettimeofday vasprintf fcntl clock_gettime strtok_r strsep getadd
 
 dnl AIX sockaddr_storage check
 AC_TRY_COMPILE([#include <sys/socket.h>],[
+struct sockaddr_storage s; s.ss_family = 0],
+cv_have_normal_sockaddr_storage=yes, cv_have_normal_sockaddr_storage=no)
+
+AC_TRY_COMPILE([#include <sys/socket.h>],[
 struct sockaddr_storage s; s.__ss_family = 0],
 samba_cv_have_aix_sockaddr_storage=yes,samba_cv_have_aix_sockaddr_storage=no)
 
 if test x"$samba_cv_have_aix_sockaddr_storage" = x"yes"; then
-   AC_DEFINE(HAVE_AIX_SOCKADDR_STORAGE, 1, [Whether struct sockaddr_storage has __sa_family])
+   if test x"$cv_have_normal_sockaddr_storage" = x"no"; then
+     AC_DEFINE(HAVE_AIX_SOCKADDR_STORAGE, 1,
+       [Whether struct sockaddr_storage has __sa_family])
+   fi
 fi
 
 # Check for gethostbyname_r in all its glorious incompatible versions.
