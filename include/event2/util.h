@@ -208,9 +208,7 @@ extern "C" {
 #endif
 
 #ifdef _EVENT_HAVE_AIX_SOCKADDR_STORAGE
-#ifndef ss_family
 #define ss_family __ss_family
-#endif
 #endif
 
 #ifdef WIN32
