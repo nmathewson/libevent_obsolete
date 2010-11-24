@@ -207,12 +207,6 @@ extern "C" {
 #define ev_socklen_t socklen_t
 #endif
 
-#ifdef _EVENT_HAVE_AIX_SOCKADDR_STORAGE
-#ifndef ss_family
-#define ss_family __ss_family
-#endif
-#endif
-
 #ifdef WIN32
 /** A type wide enough to hold the output of "socket()" or "accept()".  On
  * Windows, this is an intptr_t; elsewhere, it is an int. */
