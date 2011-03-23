@@ -1021,9 +1021,30 @@ evhttp_read_cb(struct bufferevent *bufev, void *arg)
 	case EVCON_READING_TRAILER:
 		evhttp_read_trailer(evcon, req);
 		break;
+	case EVCON_IDLE:
+		{
+			char sample[64];
+			struct evbuffer *input;
+			size_t sample_len, rest_len;
+
+			sample_len = bufferevent_read(evcon->bufev,
+						      sample, sizeof(sample));
+			input = bufferevent_get_input(evcon->bufev);
+			rest_len = evbuffer_get_length(input);
+			evbuffer_drain(input, rest_len);
+
+			event_warnx("%s: read %d bytes"
+				    " in EVCON_IDLE state: '%.*s%s';"
+				    " resetting connection",
+				    __func__, (int)(sample_len + rest_len),
+				    (int)sample_len, sample,
+				    rest_len ? "..." : "");
+
+			evhttp_connection_reset(evcon);
+		}
+		break;
 	case EVCON_DISCONNECTED:
 	case EVCON_CONNECTING:
-	case EVCON_IDLE:
 	case EVCON_WRITING:
 	default:
 		event_errx(1, "%s: illegal connection state %d",
