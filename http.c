@@ -1023,22 +1023,15 @@ evhttp_read_cb(struct bufferevent *bufev, void *arg)
 		break;
 	case EVCON_IDLE:
 		{
-			char sample[64];
 			struct evbuffer *input;
-			size_t sample_len, rest_len;
+			size_t total_len;
 
-			sample_len = bufferevent_read(evcon->bufev,
-						      sample, sizeof(sample));
 			input = bufferevent_get_input(evcon->bufev);
-			rest_len = evbuffer_get_length(input);
-			evbuffer_drain(input, rest_len);
+			total_len = evbuffer_get_length(input);
 
-			event_warnx("%s: read %d bytes"
-				    " in EVCON_IDLE state: '%.*s%s';"
-				    " resetting connection",
-				    __func__, (int)(sample_len + rest_len),
-				    (int)sample_len, sample,
-				    rest_len ? "..." : "");
+			event_warnx("%s: read %d bytes in EVCON_IDLE state,"
+                                    " resetting connection",
+                                    __func__, (int)total_len);
 
 			evhttp_connection_reset(evcon);
 		}
