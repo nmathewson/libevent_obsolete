@@ -866,14 +866,13 @@ evhttp_handle_chunked_read(struct evhttp_request *req, struct evbuffer *buf)
 			continue;
 		}
 
-		/* don't have enough to complete a chunk; wait for more */
-		if (len < req->ntoread)
-			return (MORE_DATA_EXPECTED);
+		if (len > req->ntoread)
+			len = req->ntoread;
 
-		/* Completed chunk */
-		/* XXXX fixme: what if req->ntoread is > SIZE_T_MAX? */
-		evbuffer_remove_buffer(buf, req->input_buffer, (size_t)req->ntoread);
-		req->ntoread = -1;
+		evbuffer_remove_buffer(buf, req->input_buffer, len);
+		req->ntoread -= len;
+		if (req->ntoread == 0)
+			req->ntoread = -1;
 		if (req->chunk_cb != NULL) {
 			req->flags |= EVHTTP_REQ_DEFER_FREE;
 			(*req->chunk_cb)(req, req->cb_arg);
