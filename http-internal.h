@@ -166,6 +166,12 @@ struct evhttp {
 	void (*gencb)(struct evhttp_request *req, void *);
 	void *gencbarg;
 
+	/* Incoming body callbacks */
+	void* (*body_create_cb)(struct evhttp_request *req, void *arg);
+	void (*body_on_read_cb)(struct evhttp_request *req, void *body_opaque);
+	void (*body_destroy_cb)(struct evhttp_request *req, void *body_opaque);
+	void *body_cbarg;
+
 	struct event_base *base;
 };
 

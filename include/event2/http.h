@@ -234,6 +234,38 @@ void evhttp_set_gencb(struct evhttp *http,
     void (*cb)(struct evhttp_request *, void *), void *arg);
 
 /**
+    Specifies a callback for handling incoming body data in
+    e.g. POST requests.
+
+    The 'create' callback will first be called with the 'arg'
+    provided. Its function is to create the internal state required
+    for reading the body data. The return value of it will be stored
+    as req->body_opaque, and if it's not NULL, the destroy callback
+    will be invoked later.
+
+    When reading the body data, the 'on_read' callback will be invoked -
+    possibly several times. The input data is in req->input_buffer
+    and the state, as created by the 'create' callback is in
+    req->body_opaque as well as supplied to the function.
+
+    When the request is handled (by the request callbacks), or after it
+    has been dropped due to errors, the 'destroy' callback will be
+    invoked to allow the application to clean up the body state
+    information.
+
+    @param http the evhttp server object for which to set the callback
+    @param create the callback to invoke before handling incoming data
+    @param read the callback to invoke after reading incoming data
+    @param destroy the callback to invoke when disposing the body data
+    @param arg an context argument for the create callback
+*/
+void evhttp_set_body_reader(struct evhttp *http,
+    void* (*create)(struct evhttp_request *req, void *arg),
+    void (*on_read)(struct evhttp_request *req, void *body_opaque),
+    void (*destroy)(struct evhttp_request *req, void *body_opaque),
+    void *arg);
+
+/**
    Adds a virtual host to the http server.
 
    A virtual host is a newly initialized evhttp object that has request

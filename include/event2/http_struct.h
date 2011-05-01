@@ -120,6 +120,9 @@ struct {
 	 * the regular callback.
 	 */
 	void (*chunk_cb)(struct evhttp_request *, void *);
+
+	/* The opaque pointer representing read body data. */
+	void *body_opaque;
 };
 
 #ifdef __cplusplus
