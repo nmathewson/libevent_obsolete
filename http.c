@@ -382,6 +382,43 @@ evhttp_write_buffer(struct evhttp_connection *evcon,
 	    evcon);
 }
 
+
+static int
+evhttp_body_read_cb(struct evhttp_connection *evcon,
+		    struct evhttp_request *req,
+		    struct evbuffer* buf)
+{
+	size_t input_length;
+	if (!evcon->http_server || !evcon->http_server->body_on_read_cb)
+		return 0;
+
+	if (req->body_opaque == NULL &&
+	    evcon->http_server->body_create_cb) {
+		req->body_opaque = (*evcon->http_server->body_create_cb)(
+			req, evcon->http_server->body_cbarg);
+	}
+	input_length = evbuffer_get_length(buf);
+	req->ntoread   -= input_length;
+	req->body_size += input_length;
+
+	evbuffer_remove_buffer(buf, req->input_buffer, input_length);
+	if (input_length)
+		(*evcon->http_server->body_on_read_cb)(req, req->body_opaque);
+	evbuffer_drain(req->input_buffer, input_length);
+	return 1;
+}
+
+static void
+evhttp_call_body_destroy(struct evhttp_connection *evcon,
+			 struct evhttp_request *req)
+{
+	if (req->body_opaque && evcon->http_server->body_destroy_cb) {
+		evcon->http_server->body_destroy_cb(req, req->body_opaque);
+		req->body_opaque = NULL;
+	}
+}
+
+
 static void
 evhttp_send_continue_done(struct evhttp_connection *evcon, void *arg)
 {
@@ -700,6 +737,7 @@ evhttp_connection_fail(struct evhttp_connection *evcon,
 		 * For HTTP problems, we might have to send back a
 		 * reply before the connection can be freed.
 		 */
+		evhttp_call_body_destroy(evcon, req);
 		if (evhttp_connection_incoming_fail(req, error) == -1)
 			evhttp_connection_free(evcon);
 		return;
@@ -801,6 +839,7 @@ evhttp_connection_done(struct evhttp_connection *evcon)
 
 	/* notify the user of the request */
 	(*req->cb)(req, req->cb_arg);
+	evhttp_call_body_destroy(evcon, req);
 
 	/* if this was an outgoing request, we own and it's done. so free it.
 	 * unless the callback specifically requested to own the request.
@@ -943,14 +982,19 @@ evhttp_read_body(struct evhttp_connection *evcon, struct evhttp_request *req)
 		evbuffer_add_buffer(req->input_buffer, buf);
 	} else if (req->chunk_cb != NULL ||
 	    evbuffer_get_length(buf) >= (size_t)req->ntoread) {
-		/* We've postponed moving the data until now, but we're
-		 * about to use it. */
-		size_t n = evbuffer_get_length(buf);
-		if (n > (size_t) req->ntoread)
-			n = (size_t) req->ntoread;
-		req->ntoread -= n;
-		req->body_size += n;
-		evbuffer_remove_buffer(buf, req->input_buffer, n);
+		/* Final part */
+		if (!evhttp_body_read_cb(evcon, req, buf)) {
+			/* We've postponed moving the data until now, but we're
+			 * about to use it. */
+			size_t n = evbuffer_get_length(buf);
+			if (n > (size_t) req->ntoread)
+				n = (size_t) req->ntoread;
+			req->ntoread -= n;
+			req->body_size += n;
+			evbuffer_remove_buffer(buf, req->input_buffer, n);
+		}
+	} else {
+	  evhttp_body_read_cb(evcon, req, buf);
 	}
 
 	if (req->body_size > req->evcon->max_body_size ||
@@ -3353,6 +3397,19 @@ void
 evhttp_set_allowed_methods(struct evhttp* http, ev_uint16_t methods)
 {
 	http->allowed_methods = methods;
+}
+
+void
+evhttp_set_body_reader(struct evhttp *http,
+	void* (*create)(struct evhttp_request *req, void *arg),
+	void (*on_read)(struct evhttp_request *req, void *body_opaque),
+	void (*destroy)(struct evhttp_request *req, void *body_opaque),
+	void *arg)
+{
+	http->body_create_cb = create;
+	http->body_on_read_cb = on_read;
+	http->body_destroy_cb = destroy;
+	http->body_cbarg = arg;
 }
 
 int
