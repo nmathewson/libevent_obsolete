@@ -77,6 +77,8 @@ struct {
 #define EVHTTP_REQ_DEFER_FREE		0x0008
 /** The request should be freed upstack */
 #define EVHTTP_REQ_NEEDS_FREE		0x0010
+// From http.h:
+//#define EVHTTP_REQFLAG_BUFFER_CHUNK	0x0020
 
 	struct evkeyvalq *input_headers;
 	struct evkeyvalq *output_headers;

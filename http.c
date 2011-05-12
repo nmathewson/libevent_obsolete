@@ -873,7 +873,8 @@ evhttp_handle_chunked_read(struct evhttp_request *req, struct evbuffer *buf)
 		req->ntoread -= len;
 		if (req->ntoread == 0)
 			req->ntoread = -1;
-		if (req->chunk_cb != NULL) {
+		if (req->chunk_cb != NULL &&
+		    (!(req->flags & EVHTTP_REQFLAG_BUFFER_CHUNK) || req->ntoread == -1)) {
 			req->flags |= EVHTTP_REQ_DEFER_FREE;
 			(*req->chunk_cb)(req, req->cb_arg);
 			evbuffer_drain(req->input_buffer,
@@ -3463,6 +3464,13 @@ evhttp_request_new(void (*cb)(struct evhttp_request *, void *), void *arg)
 	if (req != NULL)
 		evhttp_request_free(req);
 	return (NULL);
+}
+
+void
+evhttp_request_set_flags(struct evhttp_request *req, unsigned flags)
+{
+	if (flags & EVHTTP_REQFLAG_BUFFER_CHUNK)
+		req->flags |= EVHTTP_REQFLAG_BUFFER_CHUNK;
 }
 
 void

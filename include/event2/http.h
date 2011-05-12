@@ -415,6 +415,21 @@ struct evhttp_request *evhttp_request_new(
 void evhttp_request_set_chunked_cb(struct evhttp_request *,
     void (*cb)(struct evhttp_request *, void *));
 
+/**
+ * Set flags on the request.  See EVHTTP_REQFLAG_* for more information.
+ * @param flags Zero or more EVHTTP_REQFLAG_* flags to set for this request.
+ */
+void evhttp_request_set_flags(struct evhttp_request *, unsigned flags);
+
+/** Only deliver callbacks for complete HTTP chunks.
+ *
+ * This causes the http library to buffer HTTP content until a complete HTTP
+ * chunk has been received.  It is unsafe to set this flag on a publically
+ * accessible webserver if the max_body_size option is not set, because a client
+ * could send an arbitrarily large HTTP chunk, running the server out of memory.
+ */
+#define EVHTTP_REQFLAG_BUFFER_CHUNK 0x20
+
 /** Frees the request object and removes associated events. */
 void evhttp_request_free(struct evhttp_request *req);
 
