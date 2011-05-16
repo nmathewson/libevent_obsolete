@@ -825,69 +825,106 @@ evhttp_connection_done(struct evhttp_connection *evcon)
  */
 
 static enum message_read_status
-evhttp_handle_chunked_read(struct evhttp_request *req, struct evbuffer *buf)
-{
-	ev_ssize_t len;
+evhttp_handle_chunked_read(struct evhttp_request * req, struct evbuffer * buf) {
+    ev_ssize_t len = 0;
 
-	while ((len = evbuffer_get_length(buf)) > 0) {
-		if (req->ntoread < 0) {
-			/* Read chunk size */
-			ev_int64_t ntoread;
-			char *p = evbuffer_readln(buf, NULL, EVBUFFER_EOL_CRLF);
-			char *endp;
-			int error;
-			if (p == NULL)
-				break;
-			/* the last chunk is on a new line? */
-			if (strlen(p) == 0) {
-				mm_free(p);
-				continue;
-			}
-			ntoread = evutil_strtoll(p, &endp, 16);
-			error = (*p == '\0' ||
-			    (*endp != '\0' && *endp != ' ') ||
-			    ntoread < 0);
-			mm_free(p);
-			if (error) {
-				/* could not get chunk size */
-				return (DATA_CORRUPTED);
-			}
-			if (req->body_size + (size_t)ntoread > req->evcon->max_body_size) {
-				/* failed body length test */
-				event_debug(("Request body is too long"));
-				return (DATA_TOO_LONG);
-			}
-			req->body_size += (size_t)ntoread;
-			req->ntoread = ntoread;
-			if (req->ntoread == 0) {
-				/* Last chunk */
-				return (ALL_DATA_READ);
-			}
-			continue;
-		}
+    if (req == NULL || buf == NULL) {
+        return DATA_CORRUPTED;
+    }
 
-		/* don't have enough to complete a chunk; wait for more */
-		if (len < req->ntoread)
-			return (MORE_DATA_EXPECTED);
+    while (1) {
+        size_t buflen = 0;
 
-		/* Completed chunk */
-		/* XXXX fixme: what if req->ntoread is > SIZE_T_MAX? */
-		evbuffer_remove_buffer(buf, req->input_buffer, (size_t)req->ntoread);
-		req->ntoread = -1;
-		if (req->chunk_cb != NULL) {
-			req->flags |= EVHTTP_REQ_DEFER_FREE;
-			(*req->chunk_cb)(req, req->cb_arg);
-			evbuffer_drain(req->input_buffer,
-			    evbuffer_get_length(req->input_buffer));
-			req->flags &= ~EVHTTP_REQ_DEFER_FREE;
-			if ((req->flags & EVHTTP_REQ_NEEDS_FREE) != 0) {
-				return (REQUEST_CANCELED);
-			}
-		}
-	}
+        if ((buflen = evbuffer_get_length(buf)) == 0) {
+            break;
+        }
 
-	return (MORE_DATA_EXPECTED);
-}
+        if (buflen > INTMAX_MAX) {
+            return DATA_CORRUPTED;
+        }
+
+        len = (ev_ssize_t)buflen;
+
+        if (req->ntoread < 0) {
+            ev_int64_t ntoread = 0;
+            int        error   = 0;
+            char     * p       = NULL;
+            char     * endp    = NULL;
+
+            if (!(p = evbuffer_readln(buf, NULL, EVBUFFER_EOL_CRLF))) {
+                break;
+            }
+
+            if (strlen(p) == 0) {
+                mm_free(p);
+                continue;
+            }
+
+            ntoread = evutil_strtoll(p, &endp, 16);
+
+            if (ntoread < 0 || *p == '\0' || (*endp != '\0' && *endp != ' ')) {
+                error = 1;
+            }
+
+            mm_free(p);
+
+            if (error == 1) {
+                return DATA_CORRUPTED;
+            }
+
+            if ((ntoread + req->body_size) < ntoread) {
+                return DATA_CORRUPTED;
+            }
+
+            if ((req->body_size + (size_t)ntoread) > req->evcon->max_body_size) {
+                event_debug(("Request body is too long"));
+                return DATA_TOO_LONG;
+            }
+
+            req->body_size += (size_t)ntoread;
+            req->ntoread    = ntoread;
+
+            if (req->ntoread == 0) {
+                return ALL_DATA_READ;
+            }
+
+            continue;
+        }
+
+        if (req->ntoread > INTMAX_MAX) {
+            return DATA_CORRUPTED;
+        }
+
+        if (len < req->ntoread) {
+            return MORE_DATA_EXPECTED;
+        }
+
+        /* Completed chunk */
+        if (evbuffer_remove_buffer(buf, req->input_buffer, (size_t)req->ntoread) < 0) {
+            return DATA_CORRUPTED;
+        }
+
+        req->ntoread = -1;
+
+        if (req->chunk_cb != NULL) {
+            req->flags |= EVHTTP_REQ_DEFER_FREE;
+
+            (*req->chunk_cb)(req, req->cb_arg);
+
+            evbuffer_drain(req->input_buffer,
+                evbuffer_get_length(req->input_buffer));
+
+            req->flags &= ~EVHTTP_REQ_DEFER_FREE;
+
+            if ((req->flags & EVHTTP_REQ_NEEDS_FREE)) {
+                return REQUEST_CANCELED;
+            }
+        }
+    }
+
+    return MORE_DATA_EXPECTED;
+} /* evhttp_handle_chunked_read */
+
 
 static void
 evhttp_read_trailer(struct evhttp_connection *evcon, struct evhttp_request *req)
