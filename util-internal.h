@@ -268,6 +268,9 @@ long evutil_tv_to_msec(const struct timeval *tv);
 
 int evutil_hex_char_to_int(char c);
 
+void evutil_free_secure_rng_globals(void);
+void evutil_free_globals(void);
+
 #ifdef _WIN32
 HANDLE evutil_load_windows_system_library(const TCHAR *library_name);
 #endif

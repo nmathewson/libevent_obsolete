@@ -106,7 +106,22 @@ evutil_secure_rng_global_setup_locks_(const int enable_locks)
 	EVTHREAD_SETUP_GLOBAL_LOCK(arc4rand_lock, 0);
 	return 0;
 }
+
 #endif
+
+static void
+evutil_free_secure_rng_globals_locks() {
+#ifndef _EVENT_DISABLE_THREAD_SUPPORT
+	if (arc4rand_lock != NULL) {
+		EVTHREAD_FREE_LOCK(arc4rand_lock, 0);
+	}
+#endif
+	return;
+}
+void
+evutil_free_secure_rng_globals(void) {
+    evutil_free_secure_rng_globals_locks();
+}
 
 int
 evutil_secure_rng_init(void)
