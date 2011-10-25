@@ -575,6 +575,21 @@ evbuffer_get_contiguous_space(const struct evbuffer *buf)
 }
 
 int
+evbuffer_set_block_size(struct evbuffer * buf, size_t size)
+{
+	int res = -1;
+	EVBUFFER_LOCK(buf);
+
+	if (size > 0) {
+		buf->chain_block_size = size;
+		res = 0;
+	}
+
+	EVBUFFER_UNLOCK(buf);
+	return res;
+}
+
+int
 evbuffer_reserve_space(struct evbuffer *buf, ev_ssize_t size,
     struct evbuffer_iovec *vec, int n_vecs)
 {
@@ -1519,9 +1534,17 @@ evbuffer_add(struct evbuffer *buf, const void *data_in, size_t datlen)
 	/* If there are no chains allocated for this buffer, allocate one
 	 * big enough to hold all the data. */
 	if (chain == NULL) {
-		chain = evbuffer_chain_new(datlen);
+		size_t r = datlen;
+
+		if (buf->chain_block_size && datlen < buf->chain_block_size) {
+			r = buf->chain_block_size;
+		}
+
+		chain = evbuffer_chain_new(r);
+
 		if (!chain)
 			goto done;
+
 		evbuffer_chain_insert(buf, chain);
 	}
 
@@ -2667,6 +2690,60 @@ done:
 
 	return result;
 }
+
+int
+evbuffer_add_iovec_reference(struct evbuffer * buf, struct evbuffer_iovec * vec,
+	int n_vec, evbuffer_ref_cleanup_cb cleanupfn, void * extra) {
+    int n;
+    int res = -1;
+
+
+    EVBUFFER_LOCK(buf);
+
+    for (n = 0; n < n_vec; n++) {
+	if (evbuffer_add_reference(buf, vec[n].iov_base, vec[n].iov_len,
+		    cleanupfn, extra) < 0) {
+	    goto done;
+	}
+    }
+
+    res = 0;
+
+done:
+    EVBUFFER_UNLOCK(buf);
+    return res;
+}
+
+size_t
+evbuffer_add_iovec(struct evbuffer * buf, struct evbuffer_iovec * vec, int n_vec)
+{
+	int n;
+	size_t res = 0;
+	size_t to_alloc = 0;
+
+	EVBUFFER_LOCK(buf);
+
+	for (n = 0; n < n_vec; n++) {
+		to_alloc += vec[n].iov_len;
+	}
+
+	if (_evbuffer_expand_fast(buf, to_alloc, NUM_READ_IOVEC) < 0) {
+		goto done;
+	}
+
+	for (n = 0; n < n_vec; n++) {
+		if (evbuffer_add(buf, vec[n].iov_base, vec[n].iov_len) < 0) {
+			goto done;
+		}
+
+		res += vec[n].iov_len;
+	}
+
+done:
+	EVBUFFER_UNLOCK(buf);
+	return res;
+}
+
 
 /* TODO(niels): we may want to add to automagically convert to mmap, in
  * case evbuffer_remove() or evbuffer_pullup() are being used.

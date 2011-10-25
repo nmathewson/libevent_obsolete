@@ -950,6 +950,32 @@ struct event_base;
  */
 int evbuffer_defer_callbacks(struct evbuffer *buffer, struct event_base *base);
 
+/**
+  Any additions to an evbuffer will create a chain of at LEAST "size" bytes.
+
+  This allows the developer to manipulate the number of bytes allocated in
+  a single chain.
+
+  @param buffer the evbuffer to set the block size
+  @param size the number of bytes allocated per-chain
+  @return 0 on success, -1 on failure
+*/
+int evbuffer_set_block_size(struct evbuffer *buffer, size_t size);
+
+/**
+  Append data from 1 or more iovec's to an evbuffer
+
+  Appends all data in an iovec array to an evbuffer with only one write. This
+  can be used in lieu of constantly calling evbuffer_add() for performance
+  reasons.
+
+  @param buffer the evbuffer to write to
+  @param vec an array of evbuffer_iovec structures
+  @param n_vec the number of evbuffer_iovec's in the vec argument
+  @return the number of bytes written to the evbuffer
+*/
+size_t evbuffer_add_iovec(struct evbuffer *buffer, struct evbuffer_iovec * vec, int n_vec);
+
 #ifdef __cplusplus
 }
 #endif

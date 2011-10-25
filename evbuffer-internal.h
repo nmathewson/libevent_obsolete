@@ -152,6 +152,9 @@ struct evbuffer {
 	/** The parent bufferevent object this evbuffer belongs to.
 	 * NULL if the evbuffer stands alone. */
 	struct bufferevent *parent;
+
+	/** user-defined size that is allocated per-chain */
+	size_t chain_block_size;
 };
 
 /** A single item in an evbuffer. */
