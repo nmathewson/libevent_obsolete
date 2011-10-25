@@ -92,7 +92,6 @@
 #include "event2/event.h"
 #include "event2/buffer.h"
 #include "event2/bufferevent.h"
-#include "event2/bufferevent_compat.h"
 #include "event2/http_struct.h"
 #include "event2/http_compat.h"
 #include "event2/util.h"
@@ -1375,6 +1374,7 @@ evhttp_error_cb(struct bufferevent *bufev, short what, void *arg)
 		evhttp_connection_fail(evcon, EVCON_HTTP_TIMEOUT);
 	} else if (what & (BEV_EVENT_EOF|BEV_EVENT_ERROR)) {
 		evhttp_connection_fail(evcon, EVCON_HTTP_EOF);
+	} else if (what == BEV_EVENT_CONNECTED) {
 	} else {
 		evhttp_connection_fail(evcon, EVCON_HTTP_BUFFER_ERROR);
 	}
@@ -1434,8 +1434,9 @@ evhttp_connection_cb(struct bufferevent *bufev, short what, void *arg)
 	    evcon);
 
 	if (!evutil_timerisset(&evcon->timeout)) {
-		bufferevent_settimeout(evcon->bufev,
-		    HTTP_READ_TIMEOUT, HTTP_WRITE_TIMEOUT);
+		const struct timeval read_tv = { HTTP_READ_TIMEOUT, 0 };
+		const struct timeval write_tv = { HTTP_WRITE_TIMEOUT, 0 };
+		bufferevent_set_timeouts(evcon->bufev, &read_tv, &write_tv);
 	} else {
 		bufferevent_set_timeouts(evcon->bufev, &evcon->timeout, &evcon->timeout);
 	}
@@ -2153,7 +2154,7 @@ evhttp_connection_new(const char *address, unsigned short port)
 }
 
 struct evhttp_connection *
-evhttp_connection_base_new(struct event_base *base, struct evdns_base *dnsbase,
+evhttp_connection_base_bufferevent_new(struct event_base *base, struct evdns_base *dnsbase, struct bufferevent* bev,
     const char *address, unsigned short port)
 {
 	struct evhttp_connection *evcon = NULL;
@@ -2179,22 +2180,24 @@ evhttp_connection_base_new(struct event_base *base, struct evdns_base *dnsbase,
 		goto error;
 	}
 
-	if ((evcon->bufev = bufferevent_new(-1,
-		    evhttp_read_cb,
-		    evhttp_write_cb,
-		    evhttp_error_cb, evcon)) == NULL) {
-		event_warn("%s: bufferevent_new failed", __func__);
-		goto error;
+	if (bev == NULL) {
+		if (!(bev = bufferevent_socket_new(base, -1, 0))) {
+			event_warn("%s: bufferevent_socket_new failed", __func__);
+			goto error;
+		}
 	}
+
+	bufferevent_setcb(bev, evhttp_read_cb, evhttp_write_cb, evhttp_error_cb, evcon);
+	evcon->bufev = bev;
 
 	evcon->state = EVCON_DISCONNECTED;
 	TAILQ_INIT(&evcon->requests);
 
 	if (base != NULL) {
 		evcon->base = base;
-		bufferevent_base_set(base, evcon->bufev);
+		if (bufferevent_get_base(bev) != base)
+			bufferevent_base_set(base, evcon->bufev);
 	}
-
 
 	event_deferred_cb_init(&evcon->read_more_deferred_cb,
 	    evhttp_deferred_read_cb, evcon);
@@ -2207,6 +2210,18 @@ evhttp_connection_base_new(struct event_base *base, struct evdns_base *dnsbase,
 	if (evcon != NULL)
 		evhttp_connection_free(evcon);
 	return (NULL);
+}
+
+struct bufferevent* evhttp_connection_get_bufferevent(struct evhttp_connection *evcon)
+{
+	return evcon->bufev;
+}
+
+struct evhttp_connection *
+evhttp_connection_base_new(struct event_base *base, struct evdns_base *dnsbase,
+    const char *address, unsigned short port)
+{
+	return evhttp_connection_base_bufferevent_new(base, dnsbase, NULL, address, port);
 }
 
 void
@@ -2241,8 +2256,10 @@ evhttp_connection_set_timeout_tv(struct evhttp_connection *evcon,
 		evcon->timeout = *tv;
 		bufferevent_set_timeouts(evcon->bufev, &evcon->timeout, &evcon->timeout);
 	} else {
+		const struct timeval read_tv = { HTTP_READ_TIMEOUT, 0 };
+		const struct timeval write_tv = { HTTP_WRITE_TIMEOUT, 0 };
 		evutil_timerclear(&evcon->timeout);
-		bufferevent_settimeout(evcon->bufev, HTTP_READ_TIMEOUT, HTTP_WRITE_TIMEOUT);
+		bufferevent_set_timeouts(evcon->bufev, &read_tv, &write_tv);
 	}
 }
 
@@ -2295,10 +2312,12 @@ evhttp_connection_connect(struct evhttp_connection *evcon)
 	    NULL /* evhttp_write_cb */,
 	    evhttp_connection_cb,
 	    evcon);
-	if (!evutil_timerisset(&evcon->timeout))
-		bufferevent_settimeout(evcon->bufev, 0, HTTP_CONNECT_TIMEOUT);
-	else
+	if (!evutil_timerisset(&evcon->timeout)) {
+		const struct timeval conn_tv = { HTTP_CONNECT_TIMEOUT, 0 };
+		bufferevent_set_timeouts(evcon->bufev, NULL, &conn_tv);
+	} else {
 		bufferevent_set_timeouts(evcon->bufev, NULL, &evcon->timeout);
+	}
 	/* make sure that we get a write callback */
 	bufferevent_enable(evcon->bufev, EV_WRITE);
 
@@ -3562,6 +3581,14 @@ evhttp_set_gencb(struct evhttp *http,
 	http->gencbarg = cbarg;
 }
 
+void
+evhttp_set_bevcb(struct evhttp *http,
+    struct bufferevent* (*cb)(struct event_base *, void *), void *cbarg)
+{
+	http->bevcb = cb;
+	http->bevcbarg = cbarg;
+}
+
 /*
  * Request related functions
  */
@@ -3786,6 +3813,7 @@ evhttp_get_request_connection(
 {
 	struct evhttp_connection *evcon;
 	char *hostname = NULL, *portname = NULL;
+	struct bufferevent* bev = NULL;
 
 	name_from_addr(sa, salen, &hostname, &portname);
 	if (hostname == NULL || portname == NULL) {
@@ -3798,8 +3826,11 @@ evhttp_get_request_connection(
 			__func__, hostname, portname, fd));
 
 	/* we need a connection object to put the http request on */
-	evcon = evhttp_connection_base_new(
-		http->base, NULL, hostname, atoi(portname));
+	if (http->bevcb != NULL) {
+		bev = (*http->bevcb)(http->base, http->bevcbarg);
+	}
+	evcon = evhttp_connection_base_bufferevent_new(
+		http->base, NULL, bev, hostname, atoi(portname));
 	mm_free(hostname);
 	mm_free(portname);
 	if (evcon == NULL)

@@ -1028,14 +1028,17 @@ event_priority_init(int npriorities)
 int
 event_base_priority_init(struct event_base *base, int npriorities)
 {
-	int i;
+	int i, r;
+	r = -1;
+
+	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
 
 	if (N_ACTIVE_CALLBACKS(base) || npriorities < 1
 	    || npriorities >= EVENT_MAX_PRIORITIES)
-		return (-1);
+		goto err;
 
 	if (npriorities == base->nactivequeues)
-		return (0);
+		goto ok;
 
 	if (base->nactivequeues) {
 		mm_free(base->activequeues);
@@ -1047,7 +1050,7 @@ event_base_priority_init(struct event_base *base, int npriorities)
 	  mm_calloc(npriorities, sizeof(struct event_list));
 	if (base->activequeues == NULL) {
 		event_warn("%s: calloc", __func__);
-		return (-1);
+		goto err;
 	}
 	base->nactivequeues = npriorities;
 
@@ -1055,7 +1058,22 @@ event_base_priority_init(struct event_base *base, int npriorities)
 		TAILQ_INIT(&base->activequeues[i]);
 	}
 
-	return (0);
+ok:
+	r = 0;
+err:
+	EVBASE_RELEASE_LOCK(base, th_base_lock);
+	return (r);
+}
+
+int
+event_base_get_npriorities(struct event_base *base)
+{
+
+	int n;
+	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+	n = base->nactivequeues;
+	EVBASE_RELEASE_LOCK(base, th_base_lock);
+	return (n);
 }
 
 /* Returns true iff we're currently watching any events. */
@@ -1071,6 +1089,7 @@ static inline void
 event_signal_closure(struct event_base *base, struct event *ev)
 {
 	short ncalls;
+	int should_break;
 
 	/* Allows deletes to work */
 	ncalls = ev->ev_ncalls;
@@ -1082,11 +1101,13 @@ event_signal_closure(struct event_base *base, struct event *ev)
 		if (ncalls == 0)
 			ev->ev_pncalls = NULL;
 		(*ev->ev_callback)((int)ev->ev_fd, ev->ev_res, ev->ev_arg);
-#if 0
-		/* XXXX we can't do this without a lock on the base. */
-		if (base->event_break)
+
+		EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+		should_break = base->event_break;
+		EVBASE_RELEASE_LOCK(base, th_base_lock);
+
+		if (should_break)
 			return;
-#endif
 	}
 }
 
@@ -1633,7 +1654,8 @@ event_base_loop(struct event_base *base, int flags)
 		}
 
 		/* If we have no events, we just exit */
-		if (!event_haveevents(base) && !N_ACTIVE_CALLBACKS(base)) {
+		if (0==(flags&EVLOOP_NO_EXIT_ON_EMPTY) &&
+		    !event_haveevents(base) && !N_ACTIVE_CALLBACKS(base)) {
 			event_debug(("%s: no events registered.", __func__));
 			retval = 1;
 			goto done;

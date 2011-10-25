@@ -640,6 +640,25 @@ typedef void (*event_fatal_cb)(int err);
  */
 void event_set_fatal_callback(event_fatal_cb cb);
 
+#define EVENT_DBG_ALL 0xffffffffu
+#define EVENT_DBG_NONE 0
+
+/**
+ Turn on debugging logs and have them sent to the default log handler.
+
+ This is a global setting; if you are going to call it, you must call this
+ before any calls that create an event-base.  You must call it before any
+ multithreaded use of Libevent.
+
+ Debug logs are verbose.
+
+ @param which Controls which debug messages are turned on.  This option is
+   unused for now; for forward compatibility, you must pass in the constant
+   "EVENT_DBG_ALL" to turn debugging logs on, or "EVENT_DBG_NONE" to turn
+   debugging logs off.
+ */
+void event_enable_debug_logging(ev_uint32_t which);
+
 /**
   Associate a different event base with an event.
 
@@ -662,6 +681,11 @@ int event_base_set(struct event_base *, struct event *);
 /** Do not block: see which events are ready now, run the callbacks
  * of the highest-priority ones, then exit. */
 #define EVLOOP_NONBLOCK	0x02
+/** Do not exit the loop because we have no pending events.  Instead, keep
+ * running until event_base_loopexit() or event_base_loopbreak() makes us
+ * stop.
+ */
+#define EVLOOP_NO_EXIT_ON_EMPTY 0x04
 /**@}*/
 
 /**
@@ -1141,6 +1165,15 @@ ev_uint32_t event_get_version_number(void);
   @see event_priority_set()
  */
 int	event_base_priority_init(struct event_base *, int);
+
+/**
+  Get the number of different event priorities.
+
+  @param eb the event_base structure returned by event_base_new()
+  @return Number of different event priorities
+  @see event_base_priority_init()
+*/
+int	event_base_get_npriorities(struct event_base *eb);
 
 /**
   Assign a priority to an event.

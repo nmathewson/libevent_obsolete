@@ -166,6 +166,10 @@ extern "C" {
 #define DNS_ERR_SHUTDOWN 68
 /** The request was canceled via a call to evdns_cancel_request */
 #define DNS_ERR_CANCEL 69
+/** There were no answers and no error condition in the DNS packet.
+ * This can happen when you ask for an address that exists, but a record
+ * type that doesn't. */
+#define DNS_ERR_NODATA 70
 
 #define DNS_IPv4_A 1
 #define DNS_PTR 2
@@ -206,7 +210,7 @@ struct event_base;
 
   @param event_base the event base to associate the dns client with
   @param initialize_nameservers 1 if resolve.conf processing should occur
-  @return 0 if successful, or -1 if an error occurred
+  @return evdns_base object if successful, or NULL if an error occurred.
   @see evdns_base_free()
  */
 struct evdns_base * evdns_base_new(struct event_base *event_base, int initialize_nameservers);
@@ -266,7 +270,7 @@ int evdns_base_count_nameservers(struct evdns_base *base);
 /**
   Remove all configured nameservers, and suspend all pending resolves.
 
-  Resolves will not necessarily be re-attempted until evdns_resume() is called.
+  Resolves will not necessarily be re-attempted until evdns_base_resume() is called.
 
   @param base the evdns_base to which to apply this operation
   @return 0 if successful, or -1 if an error occurred
@@ -279,7 +283,7 @@ int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
   Resume normal operation and continue any suspended resolve requests.
 
   Re-attempt resolves left in limbo after an earlier call to
-  evdns_clear_nameservers_and_suspend().
+  evdns_base_clear_nameservers_and_suspend().
 
   @param base the evdns_base to which to apply this operation
   @return 0 if successful, or -1 if an error occurred
