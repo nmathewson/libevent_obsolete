@@ -69,6 +69,11 @@ extern "C" {
 #include <sys/socket.h>
 #endif
 
+#ifdef _EVENT_HAVE_NETINET_TCP_H
+#include <netinet/tcp.h>
+#endif
+
+
 /* Some openbsd autoconf versions get the name of this macro wrong. */
 #if defined(_EVENT_SIZEOF_VOID__) && !defined(_EVENT_SIZEOF_VOID_P)
 #define _EVENT_SIZEOF_VOID_P _EVENT_SIZEOF_VOID__
@@ -323,6 +328,12 @@ int evutil_make_socket_closeonexec(evutil_socket_t sock);
 int evutil_closesocket(evutil_socket_t sock);
 #define EVUTIL_CLOSESOCKET(s) evutil_closesocket(s)
 
+/** Do platform-specific operation to make a tcp listener socket defer accept()'s
+
+    @param sock The listening socket to to make deferred
+    @return 0 on success, -1 on failure
+*/ 
+int evutil_make_tcp_listen_socket_deferred(evutil_socket_t sock);
 
 #ifdef WIN32
 /** Return the most recent socket error.  Not idempotent on all platforms. */
