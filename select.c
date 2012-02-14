@@ -2,7 +2,7 @@
 
 /*
  * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright 2007-2011 Niels Provos and Nick Mathewson
+ * Copyright 2007-2012 Niels Provos and Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,6 +28,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_SELECT
 
 #ifdef __APPLE__
 /* Apple wants us to define this if we might ever pass more than
@@ -338,3 +340,5 @@ select_dealloc(struct event_base *base)
 
 	select_free_selectop(base->evbase);
 }
+
+#endif /* _EVENT_HAVE_SELECT */

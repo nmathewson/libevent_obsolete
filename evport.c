@@ -1,6 +1,9 @@
 /*
  * Submitted by David Pacheco (dp.spambait@gmail.com)
  *
+ * Copyright 2006-2007 Niels Provos
+ * Copyright 2007-2012 Niels Provos and Nick Mathewson
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -52,6 +55,8 @@
 
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_EVENT_PORTS
 
 #include <sys/time.h>
 #include <sys/queue.h>
@@ -442,3 +447,5 @@ evport_dealloc(struct event_base *base)
 
 	mm_free(evpd);
 }
+
+#endif /* _EVENT_HAVE_EVENT_PORTS */

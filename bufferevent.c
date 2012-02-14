@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2002-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright (c) 2007-2011 Niels Provos, Nick Mathewson
+ * Copyright (c) 2007-2012 Niels Provos, Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -355,6 +355,26 @@ bufferevent_setcb(struct bufferevent *bufev,
 	bufev->errorcb = eventcb;
 
 	bufev->cbarg = cbarg;
+	BEV_UNLOCK(bufev);
+}
+
+void
+bufferevent_getcb(struct bufferevent *bufev,
+    bufferevent_data_cb *readcb_ptr,
+    bufferevent_data_cb *writecb_ptr,
+    bufferevent_event_cb *eventcb_ptr,
+    void **cbarg_ptr)
+{
+	BEV_LOCK(bufev);
+	if (readcb_ptr)
+		*readcb_ptr = bufev->readcb;
+	if (writecb_ptr)
+		*writecb_ptr = bufev->writecb;
+	if (eventcb_ptr)
+		*eventcb_ptr = bufev->errorcb;
+	if (cbarg_ptr)
+		*cbarg_ptr = bufev->cbarg;
+
 	BEV_UNLOCK(bufev);
 }
 

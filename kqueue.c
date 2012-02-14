@@ -2,7 +2,7 @@
 
 /*
  * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright 2007-2011 Niels Provos and Nick Mathewson
+ * Copyright 2007-2012 Niels Provos and Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,6 +28,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_KQUEUE
 
 #include <sys/types.h>
 #ifdef _EVENT_HAVE_SYS_TIME_H
@@ -328,10 +330,15 @@ kq_dispatch(struct event_base *base, struct timeval *tv)
 			case EINVAL:
 				continue;
 
-			/* Can occur on a delete if the fd is closed.  Can
-			 * occur on an add if the fd was one side of a pipe,
-			 * and the other side was closed. */
+			/* Can occur on a delete if the fd is closed. */
 			case EBADF:
+				/* XXXX On NetBSD, we can also get EBADF if we
+				 * try to add the write side of a pipe, but
+				 * the read side has already been closed.
+				 * Other BSDs call this situation 'EPIPE'. It
+				 * would be good if we had a way to report
+				 * this situation. */
+				continue;
 			/* These two can occur on an add if the fd was one side
 			 * of a pipe, and the other side was closed. */
 			case EPERM:
@@ -465,3 +472,5 @@ kq_sig_del(struct event_base *base, int nsignal, short old, short events, void *
 
 	return (0);
 }
+
+#endif /* _EVENT_HAVE_KQUEUE */

@@ -2,7 +2,7 @@
 
 /*
  * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright 2007-2011 Niels Provos and Nick Mathewson
+ * Copyright 2007-2012 Niels Provos and Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,6 +28,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_POLL
 
 #include <sys/types.h>
 #ifdef _EVENT_HAVE_SYS_TIME_H
@@ -332,3 +334,5 @@ poll_dealloc(struct event_base *base)
 	memset(pop, 0, sizeof(struct pollop));
 	mm_free(pop);
 }
+
+#endif /* _EVENT_HAVE_POLL */

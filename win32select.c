@@ -1,5 +1,5 @@
 /*
- * Copyright 2007-2011 Niels Provos and Nick Mathewson
+ * Copyright 2007-2012 Niels Provos and Nick Mathewson
  * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
  * Copyright 2003 Michael A. Davis <mike@datanerds.net>
  *
@@ -27,6 +27,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _WIN32
 
 #include <winsock2.h>
 #include <windows.h>
@@ -375,3 +377,5 @@ win32_dealloc(struct event_base *_base)
 	memset(win32op, 0, sizeof(win32op));
 	mm_free(win32op);
 }
+
+#endif

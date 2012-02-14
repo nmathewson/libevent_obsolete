@@ -1,6 +1,6 @@
 /*
  * Copyright 2000-2009 Niels Provos <provos@citi.umich.edu>
- * Copyright 2009-2011 Niels Provos and Nick Mathewson
+ * Copyright 2009-2012 Niels Provos and Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,6 +26,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_DEVPOLL
 
 #include <sys/types.h>
 #include <sys/resource.h>
@@ -130,7 +132,7 @@ devpoll_init(struct event_base *base)
 		nfiles = rl.rlim_cur;
 
 	/* Initialize the kernel queue */
-	if ((dpfd = open("/dev/poll", O_RDWR)) == -1) {
+	if ((dpfd = evutil_open_closeonexec("/dev/poll", O_RDWR, 0)) == -1) {
 		event_warn("open: /dev/poll");
 		mm_free(devpollop);
 		return (NULL);
@@ -305,3 +307,5 @@ devpoll_dealloc(struct event_base *base)
 	memset(devpollop, 0, sizeof(struct devpollop));
 	mm_free(devpollop);
 }
+
+#endif /* _EVENT_HAVE_DEVPOLL */

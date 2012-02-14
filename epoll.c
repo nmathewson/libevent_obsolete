@@ -1,6 +1,6 @@
 /*
  * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright 2007-2011 Niels Provos, Nick Mathewson
+ * Copyright 2007-2012 Niels Provos, Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,6 +26,8 @@
  */
 #include "event2/event-config.h"
 #include "evconfig-private.h"
+
+#ifdef _EVENT_HAVE_EPOLL
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -582,3 +584,5 @@ epoll_dealloc(struct event_base *base)
 	memset(epollop, 0, sizeof(struct epollop));
 	mm_free(epollop);
 }
+
+#endif /* _EVENT_HAVE_EPOLL */
