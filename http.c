@@ -3655,6 +3655,10 @@ evhttp_request_new(void (*cb)(struct evhttp_request *, void *), void *arg)
 	req->cb = cb;
 	req->cb_arg = arg;
 
+	// by gunoodaddy #FREE_CB, this free_cb is called when before really evhttp_request pointer is freed.
+	req->free_cb = NULL;
+	req->free_cb_arg = NULL;
+
 	return (req);
 
  error:
@@ -3669,6 +3673,11 @@ evhttp_request_free(struct evhttp_request *req)
 	if ((req->flags & EVHTTP_REQ_DEFER_FREE) != 0) {
 		req->flags |= EVHTTP_REQ_NEEDS_FREE;
 		return;
+	}
+
+	// by gunoodaddy #FREE_CB, this free_cb is called when before really evhttp_request pointer is freed.
+	if (req->free_cb != NULL) {
+		(*req->free_cb)(req, req->free_cb_arg);
 	}
 
 	if (req->remote_host != NULL)
@@ -3727,6 +3736,16 @@ evhttp_request_set_chunked_cb(struct evhttp_request *req,
 {
 	req->chunk_cb = cb;
 }
+
+// by gunoodaddy #FREE_CB, this free_cb is called when before really evhttp_request pointer is freed.
+void
+evhttp_request_set_free_cb(struct evhttp_request *req,
+	void (*cb)(struct evhttp_request *, void *), void *arg)
+{
+    req->free_cb = cb;
+    req->free_cb_arg = arg;
+}
+
 
 /*
  * Allows for inspection of the request URI

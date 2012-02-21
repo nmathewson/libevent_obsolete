@@ -120,6 +120,10 @@ struct {
 	 * the regular callback.
 	 */
 	void (*chunk_cb)(struct evhttp_request *, void *);
+
+	// by gunoodaddy #FREE_CB, this free_cb is called when before really evhttp_request pointer is freed.
+	void (*free_cb)(struct evhttp_request *, void *);
+	void *free_cb_arg;
 };
 
 #ifdef __cplusplus
