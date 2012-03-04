@@ -895,6 +895,21 @@ typedef void (*event_callback_fn)(evutil_socket_t, short, void *);
  */
 struct event *event_new(struct event_base *, evutil_socket_t, short, event_callback_fn, void *);
 
+/**
+  Like event_new() but passes the newly constructed event as the
+  argument for the callback function.
+
+  @param base the event base to which the event should be attached.
+  @param fd the file descriptor or signal to be monitored, or -1.
+  @param events desired events to monitor: bitfield of EV_READ, EV_WRITE,
+      EV_SIGNAL, EV_PERSIST, EV_ET.
+  @param cb callback function to be invoked when the event occurs
+
+  @return a newly allocated struct event that must later be freed with
+    event_free().
+  @see event_new()
+ */
+struct event *event_new_eventarg(struct event_base *base, evutil_socket_t fd, short events, event_callback_fn cb);
 
 /**
   Prepare a new, already-allocated event structure to be added.

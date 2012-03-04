@@ -1925,6 +1925,22 @@ event_new(struct event_base *base, evutil_socket_t fd, short events, void (*cb)(
 	return (ev);
 }
 
+struct event *
+event_new_eventarg(struct event_base *base, evutil_socket_t fd, short events, void (*cb)(evutil_socket_t, short, void *))
+{
+	struct event *ev;
+	ev = mm_malloc(sizeof(struct event));
+	if (ev == NULL)
+		return (NULL);
+	if (event_assign(ev, base, fd, events, cb, ev) < 0) {
+		mm_free(ev);
+		return (NULL);
+	}
+
+	return (ev);
+}
+
+
 void
 event_free(struct event *ev)
 {
