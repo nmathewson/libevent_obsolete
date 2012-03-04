@@ -827,6 +827,8 @@ int event_base_got_break(struct event_base *);
 	event_assign((ev), (b), (x), EV_SIGNAL|EV_PERSIST, cb, (arg))
 #define evsignal_new(b, x, cb, arg)				\
 	event_new((b), (x), EV_SIGNAL|EV_PERSIST, (cb), (arg))
+#define evsignal_new_eventarg(b, x, cb)				\
+	event_new_eventarg((b), (x), EV_SIGNAL|EV_PERSIST, (cb))
 #define evsignal_del(ev)		event_del(ev)
 #define evsignal_pending(ev, tv)	event_pending((ev), EV_SIGNAL, (tv))
 #define evsignal_initialized(ev)	event_initialized(ev)
