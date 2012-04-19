@@ -33,6 +33,14 @@
 #include <fcntl.h>
 #endif
 
+#if defined(__APPLE__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
+#if (__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1060 && \
+    __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070)
+#define FORK_BREAKS_GCOV
+#include <vproc.h>
+#endif
+#endif
+
 #include "event2/event-config.h"
 
 #ifdef EVENT____func__
@@ -157,6 +165,18 @@ regress_make_tmpfile(const void *data, size_t datalen, char **filename_out)
 #endif
 }
 
+#ifndef _WIN32
+pid_t
+regress_fork(void)
+{
+	pid_t pid = fork();
+#ifdef FORK_BREAKS_GCOV
+	vproc_transaction_begin(0);
+#endif
+	return pid;
+}
+#endif
+
 static void
 ignore_log_cb(int s, const char *msg)
 {
@@ -263,6 +283,9 @@ basic_test_cleanup(const struct testcase_t *testcase, void *ptr)
 			event_base_free(data->base);
 		}
 	}
+
+	if (testcase->flags & TT_FORK)
+		libevent_global_shutdown();
 
 	free(data);
 
@@ -392,6 +415,8 @@ main(int argc, const char **argv)
 
 	if (tinytest_main(argc,argv,testgroups))
 		return 1;
+
+	libevent_global_shutdown();
 
 	return 0;
 }

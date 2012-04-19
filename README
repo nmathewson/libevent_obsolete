@@ -47,7 +47,7 @@ The configure script also supports the following flags:
 2. USEFUL LINKS:
 
 For the latest released version of Libevent, see the official website at
-http://monkey.org/~provos/libevent/ .
+http://libevent.org/ .
 
 There's a pretty good work-in-progress manual up at
    http://www.wangafu.net/~nickm/libevent-book/ .
@@ -71,16 +71,17 @@ use and development: http://archives.seul.org/libevent/users/
 The following people have helped with suggestions, ideas, code or
 fixing bugs:
 
+  Samy Al Bahra
+  Jacob Appelbaum
   Arno Bakker
-  Alejo
   Weston Andros Adamson
   William Ahern
   Ivan Andropov
   Sergey Avseyev
   Avi Bab
+  Joachim Bauch
   Gilad Benjamini
   Stas Bekman
-  Joachim Bauch
   Denis Bilenko
   Julien Blache
   Kevin Bowling
@@ -96,6 +97,7 @@ fixing bugs:
   Christopher Davis
   Mike Davis
   Mihai Draghicioiu
+  Alexander Drozdov
   Mark Ellzey
   Shie Erlich
   Leonid Evdokimov
@@ -104,11 +106,11 @@ fixing bugs:
   Remi Gacogne
   Alexander von Gernler
   Artur Grabowski
+  Sebastian Hahn
   Dave Hart
   Greg Hazel
-  Michael Herf
-  Sebastian Hahn
   Mark Heily
+  Michael Herf
   Greg Hewgill
   Aaron Hopkins
   Tani Hosokawa
@@ -121,9 +123,11 @@ fixing bugs:
   Brian Koehmstedt
   Marko Kreen
   Valery Kyholodov
+  Ross Lagerwall
   Scott Lamb
   Christopher Layne
   Adam Langley
+  Graham Leggett
   Philip Lewis
   Zhou Li
   David Libenzi
@@ -133,13 +137,16 @@ fixing bugs:
   Hagne Mahre
   Lubomir Marinov
   Abilio Marques
+  Abel Mathew
   Nick Mathewson
   James Mansion
   Nicholas Marriott
   Andrey Matveev
   Caitlin Mercer
   Dagobert Michelsen
+  Andrea Montefusco
   Mansour Moufid
+  Mina Naguib
   Felix Nawothnig
   Trond Norbye
   Linus Nordberg
@@ -151,6 +158,7 @@ fixing bugs:
   Catalin Patulea
   Simon Perreault
   Pierre Phaneuf
+  Amarin Phaosawasdi
   Ryan Phillips
   Dimitre Piskyulev
   Pavel Plesov
@@ -165,10 +173,12 @@ fixing bugs:
   Ralf Schmitt
   Mike Smellie
   Kevin Springborn
+  Nir Soffer
   Harlan Stenn
   Steve Snyder
   Dug Song
   Dongsheng Song
+  Hannes Sowa
   Ferenc Szalai
   Brodie Thiesfield
   Jason Toffaletti
@@ -178,6 +188,7 @@ fixing bugs:
   Colin Watt
   Zack Weinberg
   Jardel Weyrich
+  Alejo
   Alex
   Taral
   propanbutan

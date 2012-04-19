@@ -36,6 +36,10 @@ extern "C" {
 
 #include <time.h>
 #include <sys/queue.h>
+#ifdef EVENT__HAVE_MACH_MACH_TIME_H
+/* For mach_timebase_info */
+#include <mach/mach_time.h>
+#endif
 #include "event2/event_struct.h"
 #include "minheap-internal.h"
 #include "evsignal-internal.h"
@@ -57,6 +61,16 @@ extern "C" {
 #define EV_CLOSURE_NONE 0
 #define EV_CLOSURE_SIGNAL 1
 #define EV_CLOSURE_PERSIST 2
+
+/* Define HAVE_ANY_MONOTONIC iff we *might* have a working monotonic
+ * clock implementation */
+#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
+#define HAVE_ANY_MONOTONIC 1
+#elif defined(EVENT__HAVE_MACH_ABSOLUTE_TIME)
+#define HAVE_ANY_MONOTONIC 1
+#elif defined(_WIN32)
+#define HAVE_ANY_MONOTONIC 1
+#endif
 
 /** Structure to define the backend of a given event_base. */
 struct eventop {
@@ -243,7 +257,21 @@ struct event_base {
 	 * too often. */
 	struct timeval tv_cache;
 
-#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
+#if defined(EVENT__HAVE_MACH_ABSOLUTE_TIME)
+	struct mach_timebase_info mach_timebase_units;
+#endif
+#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC) && defined(CLOCK_MONOTONIC_COARSE)
+#define CLOCK_IS_SELECTED
+	int monotonic_clock;
+#endif
+#ifdef _WIN32
+	DWORD last_tick_count;
+	struct timeval adjust_tick_count;
+#endif
+#if defined(HAVE_ANY_MONOTONIC)
+	/** True iff we should use our system's monotonic time implementation */
+	/* TODO: Support systems where we don't need to detct monotonic time */
+	int use_monotonic;
 	/** Difference between internal time (maybe from clock_gettime) and
 	 * gettimeofday. */
 	struct timeval tv_clock_diff;
@@ -257,14 +285,14 @@ struct event_base {
 	unsigned long th_owner_id;
 	/** A lock to prevent conflicting accesses to this event_base */
 	void *th_base_lock;
-	/** The event whose callback is executing right now */
-	struct event *current_event;
 	/** A condition that gets signalled when we're done processing an
 	 * event with waiters on it. */
 	void *current_event_cond;
 	/** Number of threads blocking on current_event_cond. */
 	int current_event_waiters;
 #endif
+	/** The event whose callback is executing right now */
+	struct event *current_event;
 
 #ifdef _WIN32
 	/** IOCP support structure, if IOCP is enabled. */
@@ -290,6 +318,10 @@ struct event_base {
 	struct event th_notify;
 	/** A function used to wake up the main thread from another thread. */
 	int (*th_notify_fn)(struct event_base *base);
+
+	/** Saved seed for weak random number generator. Some backends use
+	 * this to produce fairness among sockets. Protected by th_base_lock. */
+	struct evutil_weakrand_state weakrand_seed;
 };
 
 struct event_config_entry {

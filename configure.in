@@ -10,11 +10,11 @@ AC_INIT(event.c)
 
 AC_CONFIG_MACRO_DIR([m4])
 
-AM_INIT_AUTOMAKE(libevent,2.1.0-alpha-dev)
+AM_INIT_AUTOMAKE(libevent,2.1.1-alpha-dev)
 dnl AM_SILENT_RULES req. automake 1.11.  [no] defaults V=1
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([no])])
 AM_CONFIG_HEADER(config.h  evconfig-private.h:evconfig-private.h.in)
-AC_DEFINE(NUMERIC_VERSION, 0x02010001, [Numeric representation of the version])
+AC_DEFINE(NUMERIC_VERSION, 0x02010101, [Numeric representation of the version])
 
 dnl Initialize prefix.
 if test "$prefix" = "NONE"; then
@@ -51,12 +51,21 @@ AC_PROG_LN_S
 
 AC_PROG_GCC_TRADITIONAL
 
+# We need to test for at least gcc 2.95 here, because older versions don't
+# have -fno-strict-aliasing
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
+#if !defined(__GNUC__) || (__GNUC__ < 2) || (__GNUC__ == 2 && __GNUC_MINOR__ < 95)
+#error
+#endif])], have_gcc295=yes, have_gcc295=no)
+
 if test "$GCC" = "yes" ; then
         # Enable many gcc warnings by default...
         CFLAGS="$CFLAGS -Wall"
 	# And disable the strict-aliasing optimization, since it breaks
 	# our sockaddr-handling code in strange ways.
-	CFLAGS="$CFLAGS -fno-strict-aliasing"
+	if test x$have_gcc295 = xyes; then
+		CFLAGS="$CFLAGS -fno-strict-aliasing"
+	fi
 fi
 
 # OS X Lion started deprecating the system openssl. Let's just disable
@@ -189,6 +198,7 @@ AC_CHECK_HEADERS([ \
   fcntl.h \
   ifaddrs.h \
   inttypes.h \
+  mach/mach_time.h \
   netdb.h \
   netinet/in.h \
   netinet/in6.h \
@@ -330,6 +340,7 @@ AC_CHECK_FUNCS([ \
   inet_ntop \
   inet_pton \
   issetugid \
+  mach_absolute_time \
   mmap \
   nanosleep \
   pipe \
@@ -761,11 +772,6 @@ if test x$enable_gcc_warnings != xno && test "$GCC" = "yes"; then
 #error
 #endif])], have_clang=yes, have_clang=no)
 
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
-#if !defined(__clang__) || (__clang_major__ > 2) || (__clang_major__ == 2 && __clang_minor__ > 9)
-#error
-#endif])], have_clang29orlower=yes, have_clang29orlower=no)
-
   CFLAGS="$CFLAGS -W -Wfloat-equal -Wundef -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings -Wredundant-decls -Wchar-subscripts -Wcomment -Wformat -Wwrite-strings -Wmissing-declarations -Wredundant-decls -Wnested-externs -Wbad-function-cast -Wswitch-enum"
   if test x$enable_gcc_warnings = xyes; then
     CFLAGS="$CFLAGS -Werror"
@@ -784,10 +790,8 @@ if test x$enable_gcc_warnings != xno && test "$GCC" = "yes"; then
     CFLAGS="$CFLAGS -Waddress"
   fi
 
-  if test x$have_gcc42 = xyes && test x$have_clang29orlower = xno; then
+  if test x$have_gcc42 = xyes && test x$have_clang = xno; then
     # These warnings break gcc 4.0.2 and clang, but work on gcc 4.2
-    # We only disable these for clang 2.9 and lower, in case they are
-    # supported in later versions.
     CFLAGS="$CFLAGS -Wnormalized=id -Woverride-init"
   fi
 

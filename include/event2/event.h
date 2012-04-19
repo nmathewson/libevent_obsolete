@@ -481,7 +481,14 @@ enum event_base_config_flag {
 	    This flag has no effect if you wind up using a backend other than
 	    epoll.
 	 */
-	EVENT_BASE_FLAG_EPOLL_USE_CHANGELIST = 0x10
+	EVENT_BASE_FLAG_EPOLL_USE_CHANGELIST = 0x10,
+
+	/** Ordinarily, Libevent implements its time and timeout code using
+	    the fastest monotonic timer that we have.  If this flag is set,
+	    however, we use less efficient more precise timer, assuming one is
+	    present.
+	 */
+	EVENT_BASE_FLAG_PRECISE_TIMER = 0x20
 };
 
 /**
@@ -846,6 +853,30 @@ int event_base_got_break(struct event_base *);
 typedef void (*event_callback_fn)(evutil_socket_t, short, void *);
 
 /**
+  Return a value used to specify that the event itself must be used as the callback argument.
+
+  The function event_new() takes a callback argument which is passed
+  to the event's callback function. To specify that the argument to be
+  passed to the callback function is the event that event_new() returns,
+  pass in the return value of event_self_cbarg() as the callback argument
+  for event_new().
+
+  For example:
+  <pre>
+      struct event *ev = event_new(base, sock, events, callback, %event_self_cbarg());
+  </pre>
+
+  For consistency with event_new(), it is possible to pass the return value
+  of this function as the callback argument for event_assign() &ndash; this
+  achieves the same result as passing the event in directly.
+
+  @return a value to be passed as the callback argument to event_new() or
+  event_assign().
+  @see event_new(), event_assign()
+ */
+void *event_self_cbarg(void);
+
+/**
   Allocate and asssign a new event structure, ready to be added.
 
   The function event_new() returns a new event that can be used in
@@ -1037,6 +1068,13 @@ void event_active(struct event *ev, int res, short ncalls);
  */
 int event_pending(const struct event *ev, short events, struct timeval *tv);
 
+/**
+   If called from within the callback for an event, returns that event.
+
+   The behavior of this function is not defined when called from outside the
+   callback function for an event.
+ */
+struct event *event_base_get_running_event(struct event_base *base);
 
 /**
   Test if an event structure might be initialized.
@@ -1285,6 +1323,22 @@ int event_base_gettimeofday_cached(struct event_base *base,
  * @return 0 on success, -1 on failure
  */
 int event_base_update_cache_time(struct event_base *base);
+
+/** Release up all globally-allocated resources allocated by Libevent.
+
+    This function does not free developer-controlled resources like
+    event_bases, events, bufferevents, listeners, and so on.  It only releases
+    resources like global locks that there is no other way to free.
+
+    It is not actually necessary to call this function before exit: every
+    resource that it frees would be released anyway on exit.  It mainly exists
+    so that resource-leak debugging tools don't see Libevent as holding
+    resources at exit.
+
+    You should only call this function when no other Libevent functions will
+    be invoked -- e.g., when cleanly exiting a program.
+ */
+void libevent_global_shutdown(void);
 
 #ifdef __cplusplus
 }

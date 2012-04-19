@@ -101,7 +101,10 @@ EXTRA_DIST = \
 	libevent.pc.in \
 	Doxyfile \
 	whatsnew-2.0.txt \
+	whatsnew-2.1.txt \
 	Makefile.nmake test/Makefile.nmake \
+	ChangeLog-2.0 \
+	ChangeLog-1.4 \
 	$(PLATFORM_DEPENDENT_SRC)
 
 LIBEVENT_LIBS_LA = libevent.la libevent_core.la libevent_extra.la
@@ -231,6 +234,8 @@ noinst_HEADERS = util-internal.h mm-internal.h ipv6-internal.h \
 	changelist-internal.h iocp-internal.h \
 	ratelim-internal.h \
 	evconfig-private.h \
+	ratelim-internal.h \
+	kqueue-internal.h \
 	WIN32-Code/event2/event-config.h \
 	WIN32-Code/evconfig-private.h \
 	WIN32-Code/tree.h \

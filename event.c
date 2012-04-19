@@ -69,6 +69,11 @@
 #include "ht-internal.h"
 #include "util-internal.h"
 
+
+#ifdef EVENT__HAVE_WORKING_KQUEUE
+#include "kqueue-internal.h"
+#endif
+
 #ifdef EVENT__HAVE_EVENT_PORTS
 extern const struct eventop evportops;
 #endif
@@ -123,7 +128,7 @@ struct event_base *event_global_current_base_ = NULL;
 
 /* Global state */
 
-static int use_monotonic;
+static void *event_self_cbarg_ptr_ = NULL;
 
 /* Prototypes */
 static inline int event_add_internal(struct event *ev,
@@ -136,7 +141,10 @@ static void	event_queue_insert_inserted(struct event_base *, struct event *);
 static void	event_queue_remove_active(struct event_base *, struct event *);
 static void	event_queue_remove_timeout(struct event_base *, struct event *);
 static void	event_queue_remove_inserted(struct event_base *, struct event *);
-static void	event_queue_reinsert_timeout(struct event_base *,struct event *);
+#ifdef USE_REINSERT_TIMEOUT
+/* This code seems buggy; only turn it on if we find out what the trouble is. */
+static void	event_queue_reinsert_timeout(struct event_base *,struct event *, int was_common, int is_common, int old_timeout_idx);
+#endif
 
 static int	event_haveevents(struct event_base *);
 
@@ -330,22 +338,45 @@ HT_GENERATE(event_debug_map, event_debug_entry, node, hash_debug_entry,
 #define EVENT_BASE_ASSERT_LOCKED(base)		\
 	EVLOCK_ASSERT_LOCKED((base)->th_base_lock)
 
-/* The first time this function is called, it sets use_monotonic to 1
- * if we have a clock function that supports monotonic time */
+/* Set base->use_monotonic to 1 if we have a clock function that supports
+ * monotonic time */
 static void
-detect_monotonic(void)
+detect_monotonic(struct event_base *base, const struct event_config *cfg)
 {
 #if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
-	struct timespec	ts;
-	static int use_monotonic_initialized = 0;
+	{
+		/* CLOCK_MONOTONIC exists on FreeBSD, Linux, and Solaris.
+		 * You need to check for it at runtime, because some older
+		 * versions won't have it working. */
+		struct timespec	ts;
 
-	if (use_monotonic_initialized)
-		return;
-
-	if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
-		use_monotonic = 1;
-
-	use_monotonic_initialized = 1;
+		if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+			base->use_monotonic = 1;
+#ifdef CLOCK_IS_SELECTED
+			base->monotonic_clock = CLOCK_MONOTONIC;
+			if (cfg == NULL ||
+			    !(cfg->flags & EVENT_BASE_FLAG_PRECISE_TIMER)) {
+				if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) == 0)
+					base->monotonic_clock = CLOCK_MONOTONIC_COARSE;
+			}
+#endif
+		}
+	}
+#elif defined(EVENT__HAVE_MACH_ABSOLUTE_TIME)
+	{
+		struct mach_timebase_info mi;
+		/* OSX has mach_absolute_time() */
+		if (mach_timebase_info(&mi) == 0 && mach_absolute_time() != 0) {
+			base->use_monotonic = 1;
+			/* mach_timebase_info tells us how to convert
+			 * mach_absolute_time() into nanoseconds, but we
+			 * want to use microseconds instead. */
+			mi.denom *= 1000;
+			memcpy(&base->mach_timebase_units, &mi, sizeof(mi));
+		}
+	}
+#elif defined(_WIN32)
+	base->use_monotonic = 1;
 #endif
 }
 
@@ -368,21 +399,53 @@ gettime(struct event_base *base, struct timeval *tp)
 		return (0);
 	}
 
+#ifdef HAVE_ANY_MONOTONIC
+	if (base->use_monotonic) {
 #if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
-	if (use_monotonic) {
 		struct timespec	ts;
-
+#ifdef CLOCK_IS_SELECTED
+		if (clock_gettime(base->monotonic_clock, &ts) == -1)
+			return (-1);
+#else
 		if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
 			return (-1);
+#endif
 
 		tp->tv_sec = ts.tv_sec;
 		tp->tv_usec = ts.tv_nsec / 1000;
+#elif defined(EVENT__HAVE_MACH_ABSOLUTE_TIME)
+		uint64_t abstime = mach_absolute_time();
+		uint64_t usec;
+		usec = (abstime * base->mach_timebase_units.numer)
+		    / (base->mach_timebase_units.denom);
+		tp->tv_sec = usec / 1000000;
+		tp->tv_usec = usec % 1000000;
+#elif defined(_WIN32)
+		/* TODO: Support GetTickCount64. */
+		/* TODO: Support alternate timer backends if the user asked
+		 * for a high-precision timer. QueryPerformanceCounter is
+		 * possibly a good idea, but it is also supposed to have
+		 * reliability issues under various circumstances. */
+		DWORD ticks = GetTickCount();
+		if (ticks < base->last_tick_count) {
+			/* The 32-bit timer rolled over. Let's assume it only
+			 * happened once.  Add 2**32 msec to adjust_tick_count. */
+			const struct timeval tv_rollover = { 4294967, 296000 };
+			evutil_timeradd(&tv_rollover, &base->adjust_tick_count, &base->adjust_tick_count);
+		}
+		base->last_tick_count = ticks;
+		tp->tv_sec = ticks / 1000;
+		tp->tv_usec = (ticks % 1000) * 1000;
+		evutil_timeradd(tp, &base->adjust_tick_count, tp);
+#else
+#error "Missing monotonic time implementation."
+#endif
 		if (base->last_updated_clock_diff + CLOCK_SYNC_INTERVAL
-		    < ts.tv_sec) {
+		    < tp->tv_sec) {
 			struct timeval tv;
 			evutil_gettimeofday(&tv,NULL);
 			evutil_timersub(&tv, tp, &base->tv_clock_diff);
-			base->last_updated_clock_diff = ts.tv_sec;
+			base->last_updated_clock_diff = tp->tv_sec;
 		}
 
 		return (0);
@@ -406,7 +469,7 @@ event_base_gettimeofday_cached(struct event_base *base, struct timeval *tv)
 	if (base->tv_cache.tv_sec == 0) {
 		r = evutil_gettimeofday(tv, NULL);
 	} else {
-#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
+#ifdef HAVE_ANY_MONOTONIC
 		evutil_timeradd(&base->tv_cache, &base->tv_clock_diff, tv);
 #else
 		*tv = base->tv_cache;
@@ -584,7 +647,7 @@ event_base_new_with_config(const struct event_config *cfg)
 		event_warn("%s: calloc", __func__);
 		return NULL;
 	}
-	detect_monotonic();
+	detect_monotonic(base, cfg);
 	gettime(base, &base->event_tv);
 
 	min_heap_ctor_(&base->timeheap);
@@ -885,8 +948,11 @@ event_reinit(struct event_base *base)
 		had_signal_added = 1;
 		base->sig.ev_signal_added = 0;
 	}
-	if (base->th_notify_fd[0] != -1) {
+	if (base->th_notify_fn != NULL) {
 		was_notifiable = 1;
+		base->th_notify_fn = NULL;
+	}
+	if (base->th_notify_fd[0] != -1) {
 		event_del(&base->th_notify);
 		EVUTIL_CLOSESOCKET(base->th_notify_fd[0]);
 		if (base->th_notify_fd[1] != -1)
@@ -894,7 +960,6 @@ event_reinit(struct event_base *base)
 		base->th_notify_fd[0] = -1;
 		base->th_notify_fd[1] = -1;
 		event_debug_unassign(&base->th_notify);
-		base->th_notify_fn = NULL;
 	}
 
 	/* Replace the original evsel. */
@@ -1423,8 +1488,8 @@ event_process_active_single_queue(struct event_base *base,
 			ev->ev_res & EV_WRITE ? "EV_WRITE " : " ",
 			ev->ev_callback));
 
-#ifndef EVENT__DISABLE_THREAD_SUPPORT
 		base->current_event = ev;
+#ifndef EVENT__DISABLE_THREAD_SUPPORT
 		base->current_event_waiters = 0;
 #endif
 
@@ -1444,8 +1509,8 @@ event_process_active_single_queue(struct event_base *base,
 		}
 
 		EVBASE_ACQUIRE_LOCK(base, th_base_lock);
-#ifndef EVENT__DISABLE_THREAD_SUPPORT
 		base->current_event = NULL;
+#ifndef EVENT__DISABLE_THREAD_SUPPORT
 		if (base->current_event_waiters) {
 			base->current_event_waiters = 0;
 			EVTHREAD_COND_BROADCAST(base->current_event_cond);
@@ -1844,6 +1909,8 @@ event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, shor
 {
 	if (!base)
 		base = current_base;
+	if (arg == &event_self_cbarg_ptr_)
+		arg = ev;
 
 	event_debug_assert_not_added_(ev);
 
@@ -1908,6 +1975,23 @@ event_set(struct event *ev, evutil_socket_t fd, short events,
 	int r;
 	r = event_assign(ev, current_base, fd, events, callback, arg);
 	EVUTIL_ASSERT(r == 0);
+}
+
+void *
+event_self_cbarg(void)
+{
+	return &event_self_cbarg_ptr_;
+}
+
+struct event *
+event_base_get_running_event(struct event_base *base)
+{
+	struct event *ev = NULL;
+	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+	if (EVBASE_IN_THREAD(base))
+		ev = base->current_event;
+	EVBASE_RELEASE_LOCK(base, th_base_lock);
+	return ev;
 }
 
 struct event *
@@ -1990,7 +2074,7 @@ event_pending(const struct event *ev, short event, struct timeval *tv)
 	if (tv != NULL && (flags & event & EV_TIMEOUT)) {
 		struct timeval tmp = ev->ev_timeout;
 		tmp.tv_usec &= MICROSECONDS_MASK;
-#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
+#ifdef HAVE_ANY_MONOTONIC
 		/* correctly remamp to real time */
 		evutil_timeradd(&ev->ev_base->tv_clock_diff, &tmp, tv);
 #else
@@ -2105,6 +2189,7 @@ evthread_notify_base_default(struct event_base *base)
 	return (r < 0 && errno != EAGAIN) ? -1 : 0;
 }
 
+#ifdef EVENT__HAVE_EVENTFD
 /* Helper callback: wake an event_base from another thread.  This version
  * assumes that you have a working eventfd() implementation. */
 static int
@@ -2118,6 +2203,8 @@ evthread_notify_base_eventfd(struct event_base *base)
 
 	return (r < 0) ? -1 : 0;
 }
+#endif
+
 
 /** Tell the thread currently running the event_loop for base (if any) that it
  * needs to stop waiting in its dispatch function (if it is) and process all
@@ -2204,6 +2291,10 @@ event_add_internal(struct event *ev, const struct timeval *tv,
 	if (res != -1 && tv != NULL) {
 		struct timeval now;
 		int common_timeout;
+#ifdef USE_REINSERT_TIMEOUT
+		int was_common;
+		int old_timeout_idx;
+#endif
 
 		/*
 		 * for persistent timeout events, we remember the
@@ -2213,6 +2304,12 @@ event_add_internal(struct event *ev, const struct timeval *tv,
 		 */
 		if (ev->ev_closure == EV_CLOSURE_PERSIST && !tv_is_absolute)
 			ev->ev_io_timeout = *tv;
+
+#ifndef USE_REINSERT_TIMEOUT
+		if (ev->ev_flags & EVLIST_TIMEOUT) {
+			event_queue_remove_timeout(base, ev);
+		}
+#endif
 
 		/* Check if it is active due to a timeout.  Rescheduling
 		 * this timeout before the callback can be executed
@@ -2235,6 +2332,11 @@ event_add_internal(struct event *ev, const struct timeval *tv,
 		gettime(base, &now);
 
 		common_timeout = is_common_timeout(tv, base);
+#ifdef USE_REINSERT_TIMEOUT
+		was_common = is_common_timeout(&ev->ev_timeout, base);
+		old_timeout_idx = COMMON_TIMEOUT_IDX(&ev->ev_timeout);
+#endif
+
 		if (tv_is_absolute) {
 			ev->ev_timeout = *tv;
 		} else if (common_timeout) {
@@ -2251,7 +2353,11 @@ event_add_internal(struct event *ev, const struct timeval *tv,
 			 "event_add: event %p, timeout in %d seconds %d useconds, call %p",
 			 ev, (int)tv->tv_sec, (int)tv->tv_usec, ev->ev_callback));
 
-		event_queue_reinsert_timeout(base, ev);
+#ifdef USE_REINSERT_TIMEOUT
+		event_queue_reinsert_timeout(base, ev, was_common, common_timeout, old_timeout_idx);
+#else
+		event_queue_insert_timeout(base, ev);
+#endif
 
 		if (common_timeout) {
 			struct common_timeout_list *ctl =
@@ -2530,8 +2636,10 @@ timeout_correct(struct event_base *base, struct timeval *tv)
 	struct timeval off;
 	int i;
 
-	if (use_monotonic)
+#ifdef HAVE_ANY_MONOTONIC
+	if (base->use_monotonic)
 		return;
+#endif
 
 	/* Check if time is running backwards */
 	gettime(base, tv);
@@ -2661,25 +2769,46 @@ event_queue_remove_timeout(struct event_base *base, struct event *ev)
 	}
 }
 
+#ifdef USE_REINSERT_TIMEOUT
 /* Remove and reinsert 'ev' into the timeout queue. */
 static void
-event_queue_reinsert_timeout(struct event_base *base, struct event *ev)
+event_queue_reinsert_timeout(struct event_base *base, struct event *ev,
+    int was_common, int is_common, int old_timeout_idx)
 {
+	struct common_timeout_list *ctl;
 	if (!(ev->ev_flags & EVLIST_TIMEOUT)) {
 		event_queue_insert_timeout(base, ev);
 		return;
 	}
 
-	if (is_common_timeout(&ev->ev_timeout, base)) {
-		struct common_timeout_list *ctl =
-		    get_common_timeout_list(base, &ev->ev_timeout);
+	switch ((was_common<<1) | is_common) {
+	case 3: /* Changing from one common timeout to another */
+		ctl = base->common_timeout_queues[old_timeout_idx];
 		TAILQ_REMOVE(&ctl->events, ev,
 		    ev_timeout_pos.ev_next_with_common_timeout);
+		ctl = get_common_timeout_list(base, &ev->ev_timeout);
 		insert_common_timeout_inorder(ctl, ev);
-	} else {
+		break;
+	case 2: /* Was common; is no longer common */
+		ctl = base->common_timeout_queues[old_timeout_idx];
+		TAILQ_REMOVE(&ctl->events, ev,
+		    ev_timeout_pos.ev_next_with_common_timeout);
+		min_heap_push_(&base->timeheap, ev);
+		break;
+	case 1: /* Wasn't common; has become common. */
+		min_heap_erase_(&base->timeheap, ev);
+		ctl = get_common_timeout_list(base, &ev->ev_timeout);
+		insert_common_timeout_inorder(ctl, ev);
+		break;
+	case 0: /* was in heap; is still on heap. */
 		min_heap_adjust_(&base->timeheap, ev);
+		break;
+	default:
+		EVUTIL_ASSERT(0); /* unreachable */
+		break;
 	}
 }
+#endif
 
 /* Add 'ev' to the common timeout list in 'ev'. */
 static void
@@ -2899,6 +3028,7 @@ event_set_mem_functions(void *(*malloc_fn)(size_t sz),
 }
 #endif
 
+#ifdef EVENT__HAVE_EVENTFD
 static void
 evthread_notify_drain_eventfd(evutil_socket_t fd, short what, void *arg)
 {
@@ -2914,6 +3044,7 @@ evthread_notify_drain_eventfd(evutil_socket_t fd, short what, void *arg)
 	base->is_notify_pending = 0;
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 }
+#endif
 
 static void
 evthread_notify_drain_default(evutil_socket_t fd, short what, void *arg)
@@ -2948,13 +3079,26 @@ evthread_make_base_notifiable(struct event_base *base)
 		return 0;
 	}
 
+
+#if defined(EVENT__HAVE_WORKING_KQUEUE)
+	if (base->evsel == &kqops && event_kq_add_notify_event_(base) == 0) {
+		base->th_notify_fn = event_kq_notify_base_;
+		/* No need to add an event here; the backend can wake
+		 * itself up just fine. */
+		return 0;
+	}
+#endif
+
+#ifdef EVENT__HAVE_EVENTFD
 	base->th_notify_fd[0] = evutil_eventfd_(0,
 	    EVUTIL_EFD_CLOEXEC|EVUTIL_EFD_NONBLOCK);
 	if (base->th_notify_fd[0] >= 0) {
 		base->th_notify_fd[1] = -1;
 		notify = evthread_notify_base_eventfd;
 		cb = evthread_notify_drain_eventfd;
-	} else if (evutil_make_internal_pipe_(base->th_notify_fd) == 0) {
+	} else
+#endif
+	if (evutil_make_internal_pipe_(base->th_notify_fd) == 0) {
 		notify = evthread_notify_base_default;
 		cb = evthread_notify_drain_default;
 	} else {
@@ -3042,17 +3186,18 @@ dump_inserted_event_fn(struct event_base *base, struct event *e, void *arg)
 	if (! (e->ev_flags & (EVLIST_INSERTED|EVLIST_TIMEOUT)))
 		return 0;
 
-	fprintf(output, "  %p [%s %ld]%s%s%s%s",
+	fprintf(output, "  %p [%s %ld]%s%s%s%s%s",
 	    (void*)e, gloss, (long)e->ev_fd,
 	    (e->ev_events&EV_READ)?" Read":"",
 	    (e->ev_events&EV_WRITE)?" Write":"",
 	    (e->ev_events&EV_SIGNAL)?" Signal":"",
-	    (e->ev_events&EV_PERSIST)?" Persist":"");
+	    (e->ev_events&EV_PERSIST)?" Persist":"",
+	    (e->ev_flags&EVLIST_INTERNAL)?" Internal":"");
 	if (e->ev_flags & EVLIST_TIMEOUT) {
 		struct timeval tv;
 		tv.tv_sec = e->ev_timeout.tv_sec;
 		tv.tv_usec = e->ev_timeout.tv_usec & MICROSECONDS_MASK;
-#if defined(EVENT__HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
+#if defined(HAVE_ANY_MONOTONIC)
 		evutil_timeradd(&tv, &base->tv_clock_diff, &tv);
 #endif
 		fprintf(output, " Timeout=%ld.%06d",
@@ -3075,12 +3220,13 @@ dump_active_event_fn(struct event_base *base, struct event *e, void *arg)
 	if (! (e->ev_flags & EVLIST_ACTIVE))
 		return 0;
 
-	fprintf(output, "  %p [%s %ld, priority=%d]%s%s%s%s\n",
+	fprintf(output, "  %p [%s %ld, priority=%d]%s%s%s%s active%s\n",
 	    (void*)e, gloss, (long)e->ev_fd, e->ev_pri,
-	    (e->ev_res&EV_READ)?" Read active":"",
-	    (e->ev_res&EV_WRITE)?" Write active":"",
-	    (e->ev_res&EV_SIGNAL)?" Signal active":"",
-	    (e->ev_res&EV_TIMEOUT)?" Timeout active":"");
+	    (e->ev_res&EV_READ)?" Read":"",
+	    (e->ev_res&EV_WRITE)?" Write":"",
+	    (e->ev_res&EV_SIGNAL)?" Signal":"",
+	    (e->ev_res&EV_TIMEOUT)?" Timeout":"",
+	    (e->ev_flags&EVLIST_INTERNAL)?" [Internal]":"");
 
 	return 0;
 }
@@ -3112,6 +3258,52 @@ event_base_del_virtual_(struct event_base *base)
 	if (base->virtual_event_count == 0 && EVBASE_NEED_NOTIFY(base))
 		evthread_notify_base(base);
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
+}
+
+static void
+event_free_debug_globals_locks(void)
+{
+#ifndef EVENT__DISABLE_THREAD_SUPPORT
+#ifndef EVENT__DISABLE_DEBUG_MODE
+	if (event_debug_map_lock_ != NULL) {
+		EVTHREAD_FREE_LOCK(event_debug_map_lock_, 0);
+		event_debug_map_lock_ = NULL;
+	}
+#endif /* EVENT__DISABLE_DEBUG_MODE */
+#endif /* EVENT__DISABLE_THREAD_SUPPORT */
+	return;
+}
+
+static void
+event_free_debug_globals(void)
+{
+	event_free_debug_globals_locks();
+}
+
+static void
+event_free_evsig_globals(void)
+{
+	evsig_free_globals_();
+}
+
+static void
+event_free_evutil_globals(void)
+{
+	evutil_free_globals_();
+}
+
+static void
+event_free_globals(void)
+{
+	event_free_debug_globals();
+	event_free_evsig_globals();
+	event_free_evutil_globals();
+}
+
+void
+libevent_global_shutdown(void)
+{
+	event_free_globals();
 }
 
 #ifndef EVENT__DISABLE_THREAD_SUPPORT

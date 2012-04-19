@@ -733,7 +733,23 @@ test_common_timeout(void *ptr)
 		event_assign(&info[i].ev, base, -1, EV_TIMEOUT|EV_PERSIST,
 		    common_timeout_cb, &info[i]);
 		if (i % 2) {
-			event_add(&info[i].ev, ms_100);
+			if ((i%20)==1) {
+				/* Glass-box test: Make sure we survive the
+				 * transition to non-common timeouts. It's
+				 * a little tricky. */
+				event_add(&info[i].ev, ms_200);
+				event_add(&info[i].ev, &tmp_100_ms);
+			} else if ((i%20)==3) {
+				/* Check heap-to-common too. */
+				event_add(&info[i].ev, &tmp_200_ms);
+				event_add(&info[i].ev, ms_100);
+			} else if ((i%20)==5) {
+				/* Also check common-to-common. */
+				event_add(&info[i].ev, ms_200);
+				event_add(&info[i].ev, ms_100);
+			} else {
+				event_add(&info[i].ev, ms_100);
+			}
 		} else {
 			event_add(&info[i].ev, ms_200);
 		}
@@ -813,7 +829,7 @@ test_fork(void)
 
 	event_base_assert_ok_(current_base);
 	TT_BLATHER(("Before fork"));
-	if ((pid = fork()) == 0) {
+	if ((pid = regress_fork()) == 0) {
 		/* in the child */
 		TT_BLATHER(("In child, before reinit"));
 		event_base_assert_ok_(current_base);
@@ -1225,6 +1241,43 @@ test_manipulate_active_events(void *ptr)
 
 end:
 	event_del(&ev1);
+}
+
+static void
+event_selfarg_cb(evutil_socket_t fd, short event, void *arg)
+{
+	struct event *ev = arg;
+	struct event_base *base = event_get_base(ev);
+	event_base_assert_ok_(base);
+	event_base_loopexit(base, NULL);
+	tt_want(ev == event_base_get_running_event(base));
+}
+
+static void
+test_event_new_selfarg(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct event_base *base = data->base;
+	struct event *ev = event_new(base, -1, EV_READ, event_selfarg_cb,
+                                     event_self_cbarg());
+
+	event_active(ev, EV_READ, 1);
+	event_base_dispatch(base);
+
+	event_free(ev);
+}
+
+static void
+test_event_assign_selfarg(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct event_base *base = data->base;
+	struct event ev;
+
+	event_assign(&ev, base, -1, EV_READ, event_selfarg_cb,
+                     event_self_cbarg());
+	event_active(&ev, EV_READ, 1);
+	event_base_dispatch(base);
 }
 
 static void
@@ -2191,7 +2244,7 @@ end:
 static void
 test_mm_functions(void *arg)
 {
-	_tinytest_set_test_skipped();
+	tinytest_set_test_skipped_();
 }
 #else
 static int
@@ -2335,6 +2388,8 @@ struct testcase_t main_testcases[] = {
 	BASIC(free_active_base, TT_FORK|TT_NEED_SOCKETPAIR),
 
 	BASIC(manipulate_active_events, TT_FORK|TT_NEED_BASE),
+	BASIC(event_new_selfarg, TT_FORK|TT_NEED_BASE),
+	BASIC(event_assign_selfarg, TT_FORK|TT_NEED_BASE),
 
 	BASIC(bad_assign, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),
 	BASIC(bad_reentrant, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),

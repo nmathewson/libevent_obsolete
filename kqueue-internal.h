@@ -1,6 +1,5 @@
 /*
- * Copyright 2000-2007 Niels Provos <provos@citi.umich.edu>
- * Copyright 2007-2012 Niels Provos and Nick Mathewson
+ * Copyright (c) 2012 Niels Provos and Nick Mathewson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,42 +23,17 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef EVSIGNAL_INTERNAL_H_INCLUDED_
-#define EVSIGNAL_INTERNAL_H_INCLUDED_
+#ifndef KQUEUE_INTERNAL_H_INCLUDED_
+#define KQUEUE_INTERNAL_H_INCLUDED_
 
-#ifndef evutil_socket_t
-#include "event2/util.h"
-#endif
-#include <signal.h>
+/** Notification function, used to tell an event base to wake up from another
+ * thread.  Only works when event_kq_add_notify_event_() has previously been
+ * called successfully on that base. */
+int event_kq_notify_base_(struct event_base *base);
 
-typedef void (*ev_sighandler_t)(int);
-
-/* Data structure for the default signal-handling implementation in signal.c
+/** Prepare a kqueue-using event base to receive notifications via an internal
+ * EVFILT_USER event.  Return 0 on sucess, -1 on failure.
  */
-struct evsig_info {
-	/* Event watching ev_signal_pair[1] */
-	struct event ev_signal;
-	/* Socketpair used to send notifications from the signal handler */
-	evutil_socket_t ev_signal_pair[2];
-	/* True iff we've added the ev_signal event yet. */
-	int ev_signal_added;
-	/* Count of the number of signals we're currently watching. */
-	int ev_n_signals_added;
+int event_kq_add_notify_event_(struct event_base *base);
 
-	/* Array of previous signal handler objects before Libevent started
-	 * messing with them.  Used to restore old signal handlers. */
-#ifdef EVENT__HAVE_SIGACTION
-	struct sigaction **sh_old;
-#else
-	ev_sighandler_t **sh_old;
 #endif
-	/* Size of sh_old. */
-	int sh_old_max;
-};
-int evsig_init_(struct event_base *);
-void evsig_dealloc_(struct event_base *);
-
-void evsig_set_base_(struct event_base *base);
-void evsig_free_globals_(void);
-
-#endif /* EVSIGNAL_INTERNAL_H_INCLUDED_ */
