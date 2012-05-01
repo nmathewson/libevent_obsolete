@@ -2342,6 +2342,7 @@ evutil_sockaddr_is_loopback_(const struct sockaddr *addr)
 long
 evutil_tv_to_msec_(const struct timeval *tv)
 {
+	if (!tv) return 0;  // win32 bug crash, gunoodaddy fixed
 	if (tv->tv_usec > 1000000 || tv->tv_sec > MAX_SECONDS_IN_MSEC_LONG)
 		return -1;
 

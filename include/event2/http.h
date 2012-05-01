@@ -470,6 +470,14 @@ struct evhttp_request *evhttp_request_new(
 void evhttp_request_set_chunked_cb(struct evhttp_request *,
     void (*cb)(struct evhttp_request *, void *));
 
+
+/**
+ * Enable delivery of free notification to requestor.
+ * by gunoodaddy #FREE_CB, this cb is called when before really evhttp_request pointer is freed.
+ */
+void evhttp_request_set_free_cb(struct evhttp_request *,
+		void (*cb)(struct evhttp_request *, void *), void *arg);
+
 /** Frees the request object and removes associated events. */
 void evhttp_request_free(struct evhttp_request *req);
 
