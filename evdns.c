@@ -2152,9 +2152,8 @@ evdns_server_request_get_requesting_addr(struct evdns_server_request *req_, stru
 static void
 evdns_request_timeout_callback(evutil_socket_t fd, short events, void *arg) {
 	struct request *const req = (struct request *) arg;
-#ifndef EVENT__DISABLE_THREAD_SUPPORT
 	struct evdns_base *base = req->base;
-#endif
+
 	(void) fd;
 	(void) events;
 
@@ -2169,11 +2168,19 @@ evdns_request_timeout_callback(evutil_socket_t fd, short events, void *arg) {
 
 	if (req->tx_count >= req->base->global_max_retransmits) {
 		/* this request has failed */
+		log(EVDNS_LOG_DEBUG, "Giving up on request %p; tx_count==%d",
+		    arg, req->tx_count);
 		reply_schedule_callback(req, 0, DNS_ERR_TIMEOUT, NULL);
 		request_finished(req, &REQ_HEAD(req->base, req->trans_id), 1);
 	} else {
 		/* retransmit it */
+		struct nameserver *new_ns;
+		log(EVDNS_LOG_DEBUG, "Retransmitting request %p; tx_count==%d",
+		    arg, req->tx_count);
 		(void) evtimer_del(&req->timeout_event);
+		new_ns = nameserver_pick(base);
+		if (new_ns)
+			req->ns = new_ns;
 		evdns_request_transmit(req);
 	}
 	EVDNS_UNLOCK(base);
@@ -2243,7 +2250,7 @@ evdns_request_transmit(struct request *req) {
 	default:
 		/* all ok */
 		log(EVDNS_LOG_DEBUG,
-		    "Setting timeout for request %p", req);
+		    "Setting timeout for request %p, sent to nameserver %p", req, req->ns);
 		if (evtimer_add(&req->timeout_event, &req->base->global_timeout) < 0) {
 			log(EVDNS_LOG_WARN,
 		      "Error from libevent when adding timer for request %p",
@@ -2264,13 +2271,16 @@ nameserver_probe_callback(int result, char type, int count, int ttl, void *addre
 	(void) ttl;
 	(void) addresses;
 
-	EVDNS_LOCK(ns->base);
-	ns->probe_request = NULL;
 	if (result == DNS_ERR_CANCEL) {
 		/* We canceled this request because the nameserver came up
 		 * for some other reason.  Do not change our opinion about
 		 * the nameserver. */
-	} else if (result == DNS_ERR_NONE || result == DNS_ERR_NOTEXIST) {
+		return;
+	}
+
+	EVDNS_LOCK(ns->base);
+	ns->probe_request = NULL;
+	if (result == DNS_ERR_NONE || result == DNS_ERR_NOTEXIST) {
 		/* this is a good reply */
 		nameserver_up(ns);
 	} else {
@@ -2375,6 +2385,10 @@ evdns_base_clear_nameservers_and_suspend(struct evdns_base *base)
 		(void) event_del(&server->event);
 		if (evtimer_initialized(&server->timeout_event))
 			(void) evtimer_del(&server->timeout_event);
+		if (server->probe_request) {
+			evdns_cancel_request(server->base, server->probe_request);
+			server->probe_request = NULL;
+		}
 		if (server->socket >= 0)
 			evutil_closesocket(server->socket);
 		mm_free(server);
@@ -2494,8 +2508,8 @@ evdns_nameserver_add_impl_(struct evdns_base *base, const struct sockaddr *addre
 		goto out2;
 	}
 
-	log(EVDNS_LOG_DEBUG, "Added nameserver %s",
-	    evutil_format_sockaddr_port_(address, addrbuf, sizeof(addrbuf)));
+	log(EVDNS_LOG_DEBUG, "Added nameserver %s as %p",
+	    evutil_format_sockaddr_port_(address, addrbuf, sizeof(addrbuf)), ns);
 
 	/* insert this nameserver into the list of them */
 	if (!base->server_head) {
