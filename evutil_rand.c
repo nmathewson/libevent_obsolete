@@ -65,10 +65,16 @@ evutil_free_secure_rng_globals_locks(void)
 static void
 ev_arc4random_buf(void *buf, size_t n)
 {
-#ifdef EVENT__HAVE_ARC4RANDOM_BUF
-	return arc4random_buf(buf, n);
-#else
 	unsigned char *b = buf;
+#ifdef _EVENT_HAVE_ARC4RANDOM_BUF
+#ifdef __APPLE__
+	if (arc4random_buf) {
+		return arc4random_buf(buf, n);
+	}
+#else /* !__APPLE__ */
+	return arc4random_buf(buf, n);
+#endif
+#endif
 	/* Make sure that we start out with b at a 4-byte alignment; plenty
 	 * of CPUs care about this for 32-bit access. */
 	if (n >= 4 && ((ev_uintptr_t)b) & 3) {
@@ -87,7 +93,6 @@ ev_arc4random_buf(void *buf, size_t n)
 		ev_uint32_t u = arc4random();
 		memcpy(b, &u, n);
 	}
-#endif
 }
 
 #else /* !EVENT__HAVE_ARC4RANDOM { */
