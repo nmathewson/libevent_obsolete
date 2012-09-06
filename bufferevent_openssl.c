@@ -574,6 +574,9 @@ do_read(struct bufferevent_openssl *bev_ssl, int n_to_read) {
 	struct evbuffer_iovec space[2];
 	int result = 0;
 
+	if (bev_ssl->bev.read_suspended)
+		return 0;
+
 	atmost = bufferevent_get_read_max_(&bev_ssl->bev);
 	if (n_to_read > atmost)
 		n_to_read = atmost;
