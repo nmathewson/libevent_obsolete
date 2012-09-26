@@ -55,6 +55,30 @@
 #include "util-internal.h"
 #include "log-internal.h"
 
+#ifndef EVENT__HAVE_CLOCK_GETTIME
+/* Fallback of clock_gettime in include/event2/util.h */
+int
+evutil_clock_gettime(clockid_t clk_id, struct timespec *tp)
+{
+	struct timeval tv;
+	struct evutil_monotonic_timer base;
+
+	/* Always return 0 so just ignore the return value */
+	(void) evutil_configure_monotonic_time_(&base, 0);
+
+	if (evutil_gettime_monotonic_(&base, &tv) != 0)
+		return -1;
+
+	/*
+	 * Yes we lose accuracy but it's a fallback that will mostly be for Windows,
+	 * old Apple OS X or very old Linux kernel.
+	 */
+	tp.tv_sec = tv.tv_sec;
+	tp.tv_nsec = tv.tv_usec * 1000;
+	return 0;
+}
+#endif /* EVENT__HAVE_CLOCK_GETTIME */
+
 #ifndef EVENT__HAVE_GETTIMEOFDAY
 /* No gettimeofday; this must be windows. */
 int
