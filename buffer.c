@@ -2895,9 +2895,15 @@ evbuffer_file_segment_new(
 	seg->cleanup_cb = NULL;
 	seg->cleanup_cb_arg = NULL;
 #ifdef _WIN32
+#ifndef lseek
 #define lseek _lseeki64
+#endif
+#ifndef fstat
 #define fstat _fstat
+#endif
+#ifndef stat
 #define stat _stat
+#endif
 #endif
 	if (length == -1) {
 		struct stat st;
@@ -2985,10 +2991,10 @@ evbuffer_file_segment_materialize(struct evbuffer_file_segment *seg)
 #endif
 #ifdef _WIN32
 	if (!(flags & EVBUF_FS_DISABLE_MMAP)) {
-		long h = (long)_get_osfhandle(fd);
+		intptr_t h = _get_osfhandle(fd);
 		HANDLE m;
 		ev_uint64_t total_size = length+offset;
-		if (h == (long)INVALID_HANDLE_VALUE)
+		if ((HANDLE)h == INVALID_HANDLE_VALUE)
 			goto err;
 		m = CreateFileMapping((HANDLE)h, NULL, PAGE_READONLY,
 		    (total_size >> 32), total_size & 0xfffffffful,
