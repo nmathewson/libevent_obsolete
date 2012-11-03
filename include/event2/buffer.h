@@ -551,7 +551,8 @@ struct evbuffer_file_segment;
    A cleanup function for a evbuffer_file_segment added to an evbuffer
    for reference.
  */
-typedef void (*evbuffer_file_segment_cleanup_cb)(int flags, void* arg);
+typedef void (*evbuffer_file_segment_cleanup_cb)(
+    struct evbuffer_file_segment const* seg, int flags, void* arg);
 
 /**
    Create and return a new evbuffer_file_segment for reading data from a
