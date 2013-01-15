@@ -75,6 +75,7 @@
 #include "event2/util.h"
 
 #include "bufferevent-internal.h"
+#include "util-internal.h"
 #ifdef _WIN32
 #include "iocp-internal.h"
 #endif
@@ -256,6 +257,8 @@ test_bufferevent_watermarks_impl(int use_pair)
 		bev1 = bufferevent_new(pair[0], NULL, wm_writecb, wm_errorcb, NULL);
 		bev2 = bufferevent_new(pair[1], wm_readcb, NULL, wm_errorcb, NULL);
 	}
+	tt_assert(bev1);
+	tt_assert(bev2);
 	bufferevent_disable(bev1, EV_READ);
 	bufferevent_enable(bev2, EV_READ);
 
@@ -280,8 +283,10 @@ test_bufferevent_watermarks_impl(int use_pair)
 	tt_assert(!event_pending(&bev2->ev_write, EV_WRITE, NULL));
 
 end:
-	bufferevent_free(bev1);
-	bufferevent_free(bev2);
+	if (bev1)
+		bufferevent_free(bev1);
+	if (bev2)
+		bufferevent_free(bev2);
 }
 
 static void
@@ -390,8 +395,10 @@ test_bufferevent_filters_impl(int use_pair)
 		test_ok = 0;
 
 end:
-	bufferevent_free(bev1);
-	bufferevent_free(bev2);
+	if (bev1)
+		bufferevent_free(bev1);
+	if (bev2)
+		bufferevent_free(bev2);
 
 }
 
@@ -564,7 +571,8 @@ want_fail_eventcb(struct bufferevent *bev, short what, void *ctx)
 	if (what & BEV_EVENT_ERROR) {
 		s = bufferevent_getfd(bev);
 		err = evutil_socket_error_to_string(evutil_socket_geterror(s));
-		TT_BLATHER(("connection failure on %d: %s", s, err));
+		TT_BLATHER(("connection failure on "EV_SOCK_FMT": %s",
+			EV_SOCK_ARG(s), err));
 		test_ok = 1;
 	} else {
 		TT_FAIL(("didn't fail? what %hd", what));

@@ -53,10 +53,17 @@ extern "C" {
 #define ev_ncalls	ev_.ev_signal.ev_ncalls
 #define ev_pncalls	ev_.ev_signal.ev_pncalls
 
-/* Possible values for ev_closure in struct event. */
-#define EV_CLOSURE_NONE 0
-#define EV_CLOSURE_SIGNAL 1
-#define EV_CLOSURE_PERSIST 2
+#define ev_pri ev_evcallback.evcb_pri
+#define ev_flags ev_evcallback.evcb_flags
+#define ev_closure ev_evcallback.evcb_closure
+#define ev_callback ev_evcallback.evcb_cb_union.evcb_callback
+#define ev_arg ev_evcallback.evcb_arg
+
+/* Possible values for evcb_closure in struct event_callback */
+#define EV_CLOSURE_EVENT 0
+#define EV_CLOSURE_EVENT_SIGNAL 1
+#define EV_CLOSURE_EVENT_PERSIST 2
+#define EV_CLOSURE_CB_SELF 3
 
 /** Structure to define the backend of a given event_base. */
 struct eventop {
@@ -170,6 +177,17 @@ extern int event_debug_mode_on_;
 #define EVENT_DEBUG_MODE_IS_ON() (0)
 #endif
 
+TAILQ_HEAD(evcallback_list, event_callback);
+
+/* Sets up an event for processing once */
+struct event_once {
+	LIST_ENTRY(event_once) next_once;
+	struct event ev;
+
+	void (*cb)(evutil_socket_t, short, void *);
+	void *arg;
+};
+
 struct event_base {
 	/** Function pointers and other data to describe this event_base's
 	 * backend. */
@@ -209,14 +227,23 @@ struct event_base {
 	 * reentrant invocation. */
 	int running_loop;
 
+	/** Set to the number of deferred_cbs we've made 'active' in the
+	 * loop.  This is a hack to prevent starvation; it would be smarter
+	 * to just use event_config_set_max_dispatch_interval's max_callbacks
+	 * feature */
+	int n_deferreds_queued;
+
 	/* Active event management. */
-	/** An array of nactivequeues queues for active events (ones that
-	 * have triggered, and whose callbacks need to be called).  Low
+	/** An array of nactivequeues queues for active event_callbacks (ones
+	 * that have triggered, and whose callbacks need to be called).  Low
 	 * priority numbers are more important, and stall higher ones.
 	 */
-	struct event_list *activequeues;
+	struct evcallback_list *activequeues;
 	/** The length of the activequeues array */
 	int nactivequeues;
+	/** A list of event_callbacks that should become active the next time
+	 * we process events, but not this time. */
+	struct evcallback_list active_later_queue;
 
 	/* common timeout logic */
 
@@ -227,10 +254,6 @@ struct event_base {
 	int n_common_timeouts;
 	/** The total size of common_timeout_queues. */
 	int n_common_timeouts_allocated;
-
-	/** List of defered_cb that are active.  We run these after the active
-	 * events. */
-	struct deferred_cb_queue defer_queue;
 
 	/** Mapping from file descriptors to enabled (added) events */
 	struct event_io_map io;
@@ -266,7 +289,7 @@ struct event_base {
 	int current_event_waiters;
 #endif
 	/** The event whose callback is executing right now */
-	struct event *current_event;
+	struct event_callback *current_event;
 
 #ifdef _WIN32
 	/** IOCP support structure, if IOCP is enabled. */
@@ -296,6 +319,10 @@ struct event_base {
 	/** Saved seed for weak random number generator. Some backends use
 	 * this to produce fairness among sockets. Protected by th_base_lock. */
 	struct evutil_weakrand_state weakrand_seed;
+
+	/** List of event_onces that have not yet fired. */
+	LIST_HEAD(once_event_list, event_once) once_events;
+
 };
 
 struct event_config_entry {
@@ -347,14 +374,31 @@ struct event_config {
 #endif /* TAILQ_FOREACH */
 
 #define N_ACTIVE_CALLBACKS(base)					\
-	((base)->event_count_active + (base)->defer_queue.active_count)
+	((base)->event_count_active)
 
 int evsig_set_handler_(struct event_base *base, int evsignal,
 			  void (*fn)(int));
 int evsig_restore_handler_(struct event_base *base, int evsignal);
 
+int event_add_nolock_(struct event *ev,
+    const struct timeval *tv, int tv_is_absolute);
+int event_del_nolock_(struct event *ev);
+int event_remove_timer_nolock_(struct event *ev);
 
 void event_active_nolock_(struct event *ev, int res, short count);
+int event_callback_activate_(struct event_base *, struct event_callback *);
+int event_callback_activate_nolock_(struct event_base *, struct event_callback *);
+int event_callback_cancel_(struct event_base *base,
+    struct event_callback *evcb);
+
+void event_active_later_(struct event *ev, int res);
+void event_active_later_nolock_(struct event *ev, int res);
+void event_callback_activate_later_nolock_(struct event_base *base,
+    struct event_callback *evcb);
+int event_callback_cancel_nolock_(struct event_base *base,
+    struct event_callback *evcb);
+void event_callback_init_(struct event_base *base,
+    struct event_callback *cb);
 
 /* FIXME document. */
 void event_base_add_virtual_(struct event_base *base);
@@ -367,9 +411,8 @@ void event_base_del_virtual_(struct event_base *base);
     Returns on success; aborts on failure.
 */
 void event_base_assert_ok_(struct event_base *base);
+void event_base_assert_ok_nolock_(struct event_base *base);
 
-/* Callback type for event_base_foreach_event. */
-typedef int (*event_base_foreach_event_cb)(struct event_base *base, struct event *, void *);
 
 /* Helper function: Call 'fn' exactly once every inserted or active event in
  * the event_base 'base'.
@@ -379,7 +422,7 @@ typedef int (*event_base_foreach_event_cb)(struct event_base *base, struct event
  *
  * Requires that 'base' be locked.
  */
-int event_base_foreach_event_(struct event_base *base,
+int event_base_foreach_event_nolock_(struct event_base *base,
     event_base_foreach_event_cb cb, void *arg);
 
 #ifdef __cplusplus

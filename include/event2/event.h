@@ -39,7 +39,7 @@
   to signals or regular timeouts.
 
   Libevent is meant to replace the event loop found in event driven network
-  servers. An application just needs to call event_dispatch() and then add or
+  servers. An application just needs to call event_base_dispatch() and then add or
   remove events dynamically without having to change the event loop.
 
 
@@ -90,7 +90,7 @@
   remain allocated as long as it is active, so it should generally be
   allocated on the heap.
 
-  @section loop Dispaching evets.
+  @section loop Dispaching events.
 
   Finally, you call event_base_dispatch() to loop and dispatch events.
   You can also use event_base_loop() for more fine-grained control.
@@ -750,7 +750,7 @@ int event_base_loopexit(struct event_base *, const struct timeval *);
   event_base_loopbreak() is typically invoked from this event's callback.
   This behavior is analogous to the "break;" statement.
 
-  Subsequent invocations of event_loop() will proceed normally.
+  Subsequent invocations of event_base_loop() will proceed normally.
 
   @param eb the event_base structure returned by event_init()
   @return 0 if successful, or -1 if an error occurred
@@ -759,7 +759,26 @@ int event_base_loopexit(struct event_base *, const struct timeval *);
 int event_base_loopbreak(struct event_base *);
 
 /**
-  Checks if the event loop was told to exit by event_loopexit().
+  Tell the active event_base_loop() to scan for new events immediately.
+
+  Calling this function makes the currently active event_base_loop()
+  start the loop over again (scanning for new events) after the current
+  event callback finishes.  If the event loop is not running, this
+  function has no effect.
+
+  event_base_loopbreak() is typically invoked from this event's callback.
+  This behavior is analogous to the "continue;" statement.
+
+  Subsequent invocations of event loop will proceed normally.
+
+  @param eb the event_base structure returned by event_init()
+  @return 0 if successful, or -1 if an error occurred
+  @see event_base_loopbreak()
+ */
+int event_base_loopcontinue(struct event_base *);
+
+/**
+  Checks if the event loop was told to exit by event_base_loopexit().
 
   This function will return true for an event_base at every point after
   event_loopexit() is called, until the event loop is next entered.
@@ -773,10 +792,10 @@ int event_base_loopbreak(struct event_base *);
 int event_base_got_exit(struct event_base *);
 
 /**
-  Checks if the event loop was told to abort immediately by event_loopbreak().
+  Checks if the event loop was told to abort immediately by event_base_loopbreak().
 
   This function will return true for an event_base at every point after
-  event_loopbreak() is called, until the event loop is next entered.
+  event_base_loopbreak() is called, until the event loop is next entered.
 
   @param eb the event_base structure returned by event_init()
   @return true if event_base_loopbreak() was called on this event base,
@@ -982,13 +1001,15 @@ void event_free(struct event *);
 /**
   Schedule a one-time event
 
-  The function event_base_once() is similar to event_set().  However, it
+  The function event_base_once() is similar to event_new().  However, it
   schedules a callback to be called exactly once, and does not require the
   caller to prepare an event structure.
 
-  Note that in Libevent 2.0 and earlier, if the event is never triggered,
-  the internal memory used to hold it will never be freed.  This may be
-  fixed in a later version of Libevent.
+  Note that in Libevent 2.0 and earlier, if the event is never triggered, the
+  internal memory used to hold it will never be freed.  In Libevent 2.1,
+  the internal memory will get freed by event_base_free() if the event
+  is never triggered.  The 'arg' value, however, will not get freed in either
+  case--you'll need to free that on your own if you want it to go away.
 
   @param base an event_base
   @param fd a file descriptor to monitor, or -1 for no fd.
@@ -1016,16 +1037,26 @@ int event_base_once(struct event_base *, evutil_socket_t, short, event_callback_
   in calls to event_assign() until it is no longer pending.
 
   If the event in the ev argument already has a scheduled timeout, calling
-  event_add() replaces the old timeout with the new one, or clears the old
-  timeout if the timeout argument is NULL.
+  event_add() replaces the old timeout with the new one if tv is non-NULL.
 
-  @param ev an event struct initialized via event_set()
+  @param ev an event struct initialized via event_assign() or event_new()
   @param timeout the maximum amount of time to wait for the event, or NULL
          to wait forever
   @return 0 if successful, or -1 if an error occurred
   @see event_del(), event_assign(), event_new()
   */
 int event_add(struct event *ev, const struct timeval *timeout);
+
+/**
+   Remove a timer from a pending event without removing the event itself.
+
+   If the event has a scheduled timeout, this function unschedules it but
+   leaves the event otherwise pending.
+
+   @param ev an event struct initialized via event_assign() or event_new()
+   @return 0 on success, or -1 if  an error occurrect.
+*/
+int event_remove_timer(struct event *ev);
 
 /**
   Remove an event from the set of monitored events.
@@ -1129,6 +1160,12 @@ event_callback_fn event_get_callback(const struct event *ev);
 void *event_get_callback_arg(const struct event *ev);
 
 /**
+   Return the priority of an event.
+   @see event_priority_init(), event_get_priority()
+*/
+int event_get_priority(const struct event *ev);
+
+/**
    Extract _all_ of arguments given to construct a given event.  The
    event_base is copied into *base_out, the fd is copied into *fd_out, and so
    on.
@@ -1230,7 +1267,7 @@ int	event_base_get_npriorities(struct event_base *eb);
   @param ev an event struct
   @param priority the new priority to be assigned
   @return 0 if successful, or -1 if an error occurred
-  @see event_priority_init()
+  @see event_priority_init(), event_get_priority()
   */
 int	event_priority_set(struct event *, int);
 
@@ -1299,6 +1336,36 @@ void event_set_mem_functions(
    @param output A stdio file to write on.
  */
 void event_base_dump_events(struct event_base *, FILE *);
+
+
+/**
+ * Callback for iterating events in an event base via event_base_foreach_event
+ */
+typedef int (*event_base_foreach_event_cb)(const struct event_base *, const struct event *, void *);
+
+/**
+   Iterate over all added or active events events in an event loop, and invoke
+   a given callback on each one.
+
+   The callback must not call any function that modifies the event base, that
+   modifies any event in the event base, or that adds or removes any event to
+   the event base.  Doing so is unsupported and will lead to undefined
+   behavior -- likely, to crashes.
+
+   event_base_foreach_event() holds a lock on the event_base() for the whole
+   time it's running: slow callbacks are not advisable.
+
+   The callback function must return 0 to continue iteration, or some other
+   integer to stop iterating.
+
+   @param base An event_base on which to scan the events.
+   @param fn   A callback function to receive the events.
+   @param arg  An argument passed to the callback function.
+   @return 0 if we iterated over every event, or the value returned by the
+      callback function if the loop exited early.
+*/
+int event_base_foreach_event(struct event_base *base, event_base_foreach_event_cb fn, void *arg);
+
 
 /** Sets 'tv' to the current time (as returned by gettimeofday()),
     looking at the cached value in 'base' if possible, and calling

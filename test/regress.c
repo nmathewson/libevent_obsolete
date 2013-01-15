@@ -1350,6 +1350,131 @@ end:
 	;
 }
 
+static int n_write_a_byte_cb=0;
+static int n_read_and_drain_cb=0;
+static int n_activate_other_event_cb=0;
+static void
+write_a_byte_cb(evutil_socket_t fd, short what, void *arg)
+{
+	char buf[] = "x";
+	if (write(fd, buf, 1) == 1)
+		++n_write_a_byte_cb;
+}
+static void
+read_and_drain_cb(evutil_socket_t fd, short what, void *arg)
+{
+	char buf[128];
+	int n;
+	++n_read_and_drain_cb;
+	while ((n = read(fd, buf, sizeof(buf))) > 0)
+		;
+}
+
+static void
+activate_other_event_cb(evutil_socket_t fd, short what, void *other_)
+{
+	struct event *ev_activate = other_;
+	++n_activate_other_event_cb;
+	event_active_later_(ev_activate, EV_READ);
+}
+
+static void
+test_active_later(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct event *ev1, *ev2;
+	struct event ev3, ev4;
+	struct timeval qsec = {0, 100000};
+	ev1 = event_new(data->base, data->pair[0], EV_READ|EV_PERSIST, read_and_drain_cb, NULL);
+	ev2 = event_new(data->base, data->pair[1], EV_WRITE|EV_PERSIST, write_a_byte_cb, NULL);
+	event_assign(&ev3, data->base, -1, 0, activate_other_event_cb, &ev4);
+	event_assign(&ev4, data->base, -1, 0, activate_other_event_cb, &ev3);
+	event_add(ev1, NULL);
+	event_add(ev2, NULL);
+	event_active_later_(&ev3, EV_READ);
+
+	event_base_loopexit(data->base, &qsec);
+
+	event_base_loop(data->base, 0);
+
+	TT_BLATHER(("%d write calls, %d read calls, %d activate-other calls.",
+		n_write_a_byte_cb, n_read_and_drain_cb, n_activate_other_event_cb));
+	event_del(&ev3);
+	event_del(&ev4);
+
+	tt_int_op(n_write_a_byte_cb, ==, n_activate_other_event_cb);
+	tt_int_op(n_write_a_byte_cb, >, 100);
+	tt_int_op(n_read_and_drain_cb, >, 100);
+	tt_int_op(n_activate_other_event_cb, >, 100);
+end:
+	;
+}
+
+
+static void incr_arg_cb(evutil_socket_t fd, short what, void *arg)
+{
+	int *intptr = arg;
+	(void) fd; (void) what;
+	++*intptr;
+}
+static void remove_timers_cb(evutil_socket_t fd, short what, void *arg)
+{
+	struct event **ep = arg;
+	(void) fd; (void) what;
+	event_remove_timer(ep[0]);
+	event_remove_timer(ep[1]);
+}
+static void send_a_byte_cb(evutil_socket_t fd, short what, void *arg)
+{
+	evutil_socket_t *sockp = arg;
+	(void) fd; (void) what;
+	write(*sockp, "A", 1);
+}
+static void read_not_timeout_cb(evutil_socket_t fd, short what, void *arg)
+{
+	int *intp = arg;
+	(void) fd; (void) what;
+	*intp |= what;
+}
+
+static void
+test_event_remove_timeout(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct event_base *base = data->base;
+	struct event *ev[4];
+	int ev0_fired=0, ev1_fired=0;
+	struct timeval ms25 = { 0, 25*1000 },
+		ms75 = { 0, 75*1000 },
+		ms125 = { 0, 125*1000 };
+
+	event_base_assert_ok_(base);
+
+	ev[0] = event_new(base, data->pair[0], EV_READ,
+	    read_not_timeout_cb, &ev0_fired);
+	ev[1] = evtimer_new(base, incr_arg_cb, &ev1_fired);
+	ev[2] = evtimer_new(base, remove_timers_cb, ev);
+	ev[3] = evtimer_new(base, send_a_byte_cb, &data->pair[1]);
+	tt_assert(base);
+	event_add(ev[2], &ms25); /* remove timers */
+	event_add(ev[0], &ms75); /* read */
+	event_add(ev[1], &ms75); /* timer */
+	event_add(ev[3], &ms125); /* timeout. */
+	event_base_assert_ok_(base);
+
+	event_base_dispatch(base);
+
+	tt_int_op(ev1_fired, ==, 0);
+	tt_int_op(ev0_fired, ==, EV_READ);
+
+	event_base_assert_ok_(base);
+end:
+	event_free(ev[0]);
+	event_free(ev[1]);
+	event_free(ev[2]);
+	event_free(ev[3]);
+}
+
 static void
 test_event_base_new(void *ptr)
 {
@@ -2200,6 +2325,31 @@ end:
 }
 
 static void
+test_event_once_never(void *ptr)
+{
+	struct basic_test_data *data = ptr;
+	struct timeval tv;
+
+	/* Have one trigger in 10 seconds (don't worry, because) */
+	tv.tv_sec = 10;
+	tv.tv_usec = 0;
+	called = 0;
+	event_base_once(data->base, -1, EV_TIMEOUT,
+	    timeout_called_once_cb, NULL, &tv);
+
+	/* But shut down the base in 75 msec. */
+	tv.tv_sec = 0;
+	tv.tv_usec = 75*1000;
+	event_base_loopexit(data->base, &tv);
+
+	event_base_dispatch(data->base);
+
+	tt_int_op(called, ==, 0);
+end:
+	;
+}
+
+static void
 test_event_pending(void *ptr)
 {
 	struct basic_test_data *data = ptr;
@@ -2213,6 +2363,10 @@ test_event_pending(void *ptr)
 	w = event_new(data->base, data->pair[1], EV_WRITE, simple_write_cb,
 	    NULL);
 	t = evtimer_new(data->base, timeout_cb, NULL);
+
+	tt_assert(r);
+	tt_assert(w);
+	tt_assert(t);
 
 	evutil_gettimeofday(&now, NULL);
 	event_add(r, NULL);
@@ -2311,7 +2465,8 @@ end:
 		event_free(ev1);
 	if (ev2)
 		event_free(ev2);
-	close(dfd);
+	if (dfd >= 0)
+		close(dfd);
 }
 #endif
 
@@ -2468,7 +2623,10 @@ struct testcase_t main_testcases[] = {
 
 	BASIC(bad_assign, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),
 	BASIC(bad_reentrant, TT_FORK|TT_NEED_BASE|TT_NO_LOGS),
+	BASIC(active_later, TT_FORK|TT_NEED_BASE|TT_NEED_SOCKETPAIR),
+	BASIC(event_remove_timeout, TT_FORK|TT_NEED_BASE|TT_NEED_SOCKETPAIR),
 
+	/* These are still using the old API */
 	LEGACY(persistent_timeout, TT_FORK|TT_NEED_BASE),
 	{ "persistent_timeout_jump", test_persistent_timeout_jump, TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
 	{ "persistent_active_timeout", test_persistent_active_timeout,
@@ -2495,6 +2653,7 @@ struct testcase_t main_testcases[] = {
 	LEGACY(multiple_events_for_same_fd, TT_ISOLATED),
 	LEGACY(want_only_once, TT_ISOLATED),
 	{ "event_once", test_event_once, TT_ISOLATED, &basic_setup, NULL },
+	{ "event_once_never", test_event_once_never, TT_ISOLATED, &basic_setup, NULL },
 	{ "event_pending", test_event_pending, TT_ISOLATED, &basic_setup,
 	  NULL },
 #ifndef _WIN32

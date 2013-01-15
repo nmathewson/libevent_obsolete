@@ -108,7 +108,8 @@ getcert(void)
 
 	name = X509_NAME_new();
 	tt_assert(name);
-	tt_assert(NID_undef != (nid = OBJ_txt2nid("commonName")));
+	nid = OBJ_txt2nid("commonName");
+	tt_assert(NID_undef != nid);
 	tt_assert(0 != X509_NAME_add_entry_by_NID(
 		    name, nid, MBSTRING_ASC, (unsigned char*)"example.com",
 		    -1, -1, 0));
@@ -128,6 +129,7 @@ end:
 	return NULL;
 }
 
+static int disable_tls_11_and_12 = 0;
 static SSL_CTX *the_ssl_ctx = NULL;
 
 static SSL_CTX *
@@ -135,7 +137,18 @@ get_ssl_ctx(void)
 {
 	if (the_ssl_ctx)
 		return the_ssl_ctx;
-	return (the_ssl_ctx = SSL_CTX_new(SSLv23_method()));
+	the_ssl_ctx = SSL_CTX_new(SSLv23_method());
+	if (!the_ssl_ctx)
+		return NULL;
+	if (disable_tls_11_and_12) {
+#ifdef SSL_OP_NO_TLSv1_2
+		SSL_CTX_set_options(the_ssl_ctx, SSL_OP_NO_TLSv1_2);
+#endif
+#ifdef SSL_OP_NO_TLSv1_1
+		SSL_CTX_set_options(the_ssl_ctx, SSL_OP_NO_TLSv1_1);
+#endif
+	}
+	return the_ssl_ctx;
 }
 
 static void
@@ -145,6 +158,9 @@ init_ssl(void)
 	ERR_load_crypto_strings();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
+	if (SSLeay() != OPENSSL_VERSION_NUMBER) {
+		TT_DECLARE("WARN", ("Version mismatch for openssl: compiled with %lx but running with %lx", (unsigned long)OPENSSL_VERSION_NUMBER, (unsigned long) SSLeay()));
+	}
 }
 
 /* ====================
@@ -237,7 +253,7 @@ end:
 static void
 open_ssl_bufevs(struct bufferevent **bev1_out, struct bufferevent **bev2_out,
     struct event_base *base, int is_open, int flags, SSL *ssl1, SSL *ssl2,
-    int *fd_pair, struct bufferevent **underlying_pair)
+    evutil_socket_t *fd_pair, struct bufferevent **underlying_pair)
 {
 	int state1 = is_open ? BUFFEREVENT_SSL_OPEN :BUFFEREVENT_SSL_CONNECTING;
 	int state2 = is_open ? BUFFEREVENT_SSL_OPEN :BUFFEREVENT_SSL_ACCEPTING;
@@ -272,12 +288,22 @@ regress_bufferevent_openssl(void *arg)
 	const int filter = strstr((char*)data->setup_data, "filter")!=NULL;
 	int flags = BEV_OPT_DEFER_CALLBACKS;
 	struct bufferevent *bev_ll[2] = { NULL, NULL };
-	int *fd_pair = NULL;
+	evutil_socket_t *fd_pair = NULL;
 
 	tt_assert(cert);
 	tt_assert(key);
 
 	init_ssl();
+
+	if (strstr((char*)data->setup_data, "renegotiate")) {
+		if (SSLeay() >= 0x10001000 &&
+		    SSLeay() <  0x1000104f) {
+			/* 1.0.1 up to 1.0.1c has a bug where TLS1.1 and 1.2
+			 * can't renegotiate with themselves. Disable. */
+			disable_tls_11_and_12 = 1;
+		}
+		renegotiate_at = 600;
+	}
 
 	ssl1 = SSL_new(get_ssl_ctx());
 	ssl2 = SSL_new(get_ssl_ctx());
@@ -287,9 +313,6 @@ regress_bufferevent_openssl(void *arg)
 
 	if (! start_open)
 		flags |= BEV_OPT_CLOSE_ON_FREE;
-
-	if (strstr((char*)data->setup_data, "renegotiate"))
-		renegotiate_at = 600;
 
 	if (!filter) {
 		tt_assert(strstr((char*)data->setup_data, "socketpair"));

@@ -548,6 +548,13 @@ struct evbuffer_file_segment;
 #define EVBUF_FS_DISABLE_LOCKING  0x08
 
 /**
+   A cleanup function for a evbuffer_file_segment added to an evbuffer
+   for reference.
+ */
+typedef void (*evbuffer_file_segment_cleanup_cb)(
+    struct evbuffer_file_segment const* seg, int flags, void* arg);
+
+/**
    Create and return a new evbuffer_file_segment for reading data from a
    file and sending it out via an evbuffer.
 
@@ -580,6 +587,16 @@ struct evbuffer_file_segment *evbuffer_file_segment_new(
    until no more references to it exist.
  */
 void evbuffer_file_segment_free(struct evbuffer_file_segment *seg);
+
+/**
+   Add cleanup callback and argument for the callback to an
+   evbuffer_file_segment.
+
+   The cleanup callback will be invoked when no more references to the
+   evbuffer_file_segment exist.
+ **/
+void evbuffer_file_segment_add_cleanup_cb(struct evbuffer_file_segment *seg,
+	evbuffer_file_segment_cleanup_cb cb, void* arg);
 
 /**
    Insert some or all of an evbuffer_file_segment at the end of an evbuffer
@@ -632,7 +649,11 @@ int evbuffer_add_printf(struct evbuffer *buf, const char *fmt, ...)
   @param ap a varargs va_list argument array that will be passed to vprintf(3)
   @return The number of bytes added if successful, or -1 if an error occurred.
  */
-int evbuffer_add_vprintf(struct evbuffer *buf, const char *fmt, va_list ap);
+int evbuffer_add_vprintf(struct evbuffer *buf, const char *fmt, va_list ap)
+#ifdef __GNUC__
+	__attribute__((format(printf, 2, 0)))
+#endif
+;
 
 
 /**

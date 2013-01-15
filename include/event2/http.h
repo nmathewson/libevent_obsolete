@@ -602,6 +602,7 @@ const struct evhttp_uri *evhttp_request_get_evhttp_uri(const struct evhttp_reque
 enum evhttp_cmd_type evhttp_request_get_command(const struct evhttp_request *req);
 
 int evhttp_request_get_response_code(const struct evhttp_request *req);
+const char * evhttp_request_get_response_code_line(const struct evhttp_request *req);
 
 /** Returns the input headers */
 struct evkeyvalq *evhttp_request_get_input_headers(struct evhttp_request *req);
@@ -625,7 +626,7 @@ const char *evhttp_request_get_host(struct evhttp_request *req);
    @param headers the evkeyvalq object in which to find the header
    @param key the name of the header to find
    @returns a pointer to the value for the header or NULL if the header
-     count not be found.
+     could not be found.
    @see evhttp_add_header(), evhttp_remove_header()
 */
 const char *evhttp_find_header(const struct evkeyvalq *headers,
@@ -717,7 +718,7 @@ char *evhttp_decode_uri(const char *uri);
   The returned string must be freed by the caller.
 
   @param uri a URI-encode encoded URI
-  @param decode_plus determines whether we convert '+' to sapce.
+  @param decode_plus determines whether we convert '+' to space.
   @param size_out if size_out is not NULL, *size_out is set to the size of the
      returned string
   @return a newly allocated unencoded URI or NULL on failure

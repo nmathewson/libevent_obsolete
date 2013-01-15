@@ -134,6 +134,9 @@ bufferevent_readcb(evutil_socket_t fd, short event, void *arg)
 	bufferevent_incref_and_lock_(bufev);
 
 	if (event == EV_TIMEOUT) {
+		/* Note that we only check for event==EV_TIMEOUT. If
+		 * event==EV_TIMEOUT|EV_READ, we can safely ignore the
+		 * timeout, since a read has occurred */
 		what |= BEV_EVENT_TIMEOUT;
 		goto error;
 	}
@@ -210,6 +213,9 @@ bufferevent_writecb(evutil_socket_t fd, short event, void *arg)
 	bufferevent_incref_and_lock_(bufev);
 
 	if (event == EV_TIMEOUT) {
+		/* Note that we only check for event==EV_TIMEOUT. If
+		 * event==EV_TIMEOUT|EV_WRITE, we can safely ignore the
+		 * timeout, since a read has occurred */
 		what |= BEV_EVENT_TIMEOUT;
 		goto error;
 	}
@@ -496,6 +502,7 @@ bufferevent_socket_connect_hostname(struct bufferevent *bev,
 	} else {
 		bufferevent_unsuspend_write_(bev, BEV_SUSPEND_LOOKUP);
 		bufferevent_unsuspend_read_(bev, BEV_SUSPEND_LOOKUP);
+		bufferevent_decref_(bev);
 		return -1;
 	}
 }
@@ -593,12 +600,21 @@ static int
 be_socket_adj_timeouts(struct bufferevent *bufev)
 {
 	int r = 0;
-	if (event_pending(&bufev->ev_read, EV_READ, NULL))
-		if (be_socket_add(&bufev->ev_read, &bufev->timeout_read) < 0)
-			r = -1;
+	if (event_pending(&bufev->ev_read, EV_READ, NULL)) {
+		if (evutil_timerisset(&bufev->timeout_read)) {
+			    if (be_socket_add(&bufev->ev_read, &bufev->timeout_read) < 0)
+				    r = -1;
+		} else {
+			event_remove_timer(&bufev->ev_read);
+		}
+	}
 	if (event_pending(&bufev->ev_write, EV_WRITE, NULL)) {
-		if (be_socket_add(&bufev->ev_write, &bufev->timeout_write) < 0)
-			r = -1;
+		if (evutil_timerisset(&bufev->timeout_write)) {
+			if (be_socket_add(&bufev->ev_write, &bufev->timeout_write) < 0)
+				r = -1;
+		} else {
+			event_remove_timer(&bufev->ev_write);
+		}
 	}
 	return r;
 }
@@ -636,6 +652,8 @@ int
 bufferevent_priority_set(struct bufferevent *bufev, int priority)
 {
 	int r = -1;
+	struct bufferevent_private *bufev_p =
+	    EVUTIL_UPCAST(bufev, struct bufferevent_private, bev);
 
 	BEV_LOCK(bufev);
 	if (bufev->be_ops != &bufferevent_ops_socket)
@@ -645,6 +663,8 @@ bufferevent_priority_set(struct bufferevent *bufev, int priority)
 		goto done;
 	if (event_priority_set(&bufev->ev_write, priority) == -1)
 		goto done;
+
+	event_deferred_cb_set_priority_(&bufev_p->deferred, priority);
 
 	r = 0;
 done:

@@ -256,6 +256,9 @@ http_errorcb(struct bufferevent *bev, short what, void *arg)
 	event_base_loopexit(arg, NULL);
 }
 
+static int found_multi = 0;
+static int found_multi2 = 0;
+
 static void
 http_basic_cb(struct evhttp_request *req, void *arg)
 {
@@ -267,14 +270,23 @@ http_basic_cb(struct evhttp_request *req, void *arg)
 	/* For multi-line headers test */
 	{
 		const char *multi =
-		    evhttp_find_header(evhttp_request_get_input_headers(req),"X-multi");
+		    evhttp_find_header(evhttp_request_get_input_headers(req),"X-Multi");
 		if (multi) {
+			found_multi = !strcmp(multi,"aaaaaaaa a END");
 			if (strcmp("END", multi + strlen(multi) - 3) == 0)
 				test_ok++;
 			if (evhttp_find_header(evhttp_request_get_input_headers(req), "X-Last"))
 				test_ok++;
 		}
 	}
+	{
+		const char *multi2 =
+		    evhttp_find_header(evhttp_request_get_input_headers(req),"X-Multi-Extra-WS");
+		if (multi2) {
+			found_multi2 = !strcmp(multi2,"libevent 2.1");
+		}
+	}
+
 
 	/* injecting a bad content-length */
 	if (evhttp_find_header(evhttp_request_get_input_headers(req), "X-Negative"))
@@ -892,7 +904,6 @@ http_connection_test_(struct basic_test_data *data, int persistent)
 	/* We give ownership of the request to the connection */
 	if (evhttp_make_request(evcon, req, EVHTTP_REQ_GET, "/test") == -1) {
 		tt_abort_msg("Couldn't make request");
-		exit(1);
 	}
 
 	event_base_dispatch(data->base);
@@ -1001,7 +1012,6 @@ http_connection_async_test(void *arg)
 	/* We give ownership of the request to the connection */
 	if (evhttp_make_request(evcon, req, EVHTTP_REQ_GET, "/test") == -1) {
 		tt_abort_msg("Couldn't make request");
-		exit(1);
 	}
 
 	event_base_dispatch(data->base);
@@ -1849,7 +1859,6 @@ http_close_detection_(struct basic_test_data *data, int with_delay)
 	if (evhttp_make_request(evcon,
 	    req, EVHTTP_REQ_GET, with_delay ? "/largedelay" : "/test") == -1) {
 		tt_abort_msg("couldn't make request");
-		exit(1);
 	}
 
 	event_base_dispatch(data->base);
@@ -2668,9 +2677,11 @@ http_chunked_errorcb(struct bufferevent *bev, short what, void *arg)
 		if (header == NULL)
 			goto out;
 		/* 13 chars */
-		if (strcmp(header, "d"))
+		if (strcmp(header, "d")) {
+			free((void*)header);
 			goto out;
-		free((char*)header);
+		}
+		free((void*)header);
 
 		if (strncmp((char *)evbuffer_pullup(bufferevent_get_input(bev), 13),
 			"This is funny", 13))
@@ -2696,8 +2707,10 @@ http_chunked_errorcb(struct bufferevent *bev, short what, void *arg)
 		if (header == NULL)
 			goto out;
 		/* 8 chars */
-		if (strcmp(header, "8"))
+		if (strcmp(header, "8")) {
+			free((void*)header);
 			goto out;
+		}
 		free((char *)header);
 
 		if (strncmp((char *)evbuffer_pullup(bufferevent_get_input(bev), 8),
@@ -2710,9 +2723,11 @@ http_chunked_errorcb(struct bufferevent *bev, short what, void *arg)
 		if (header == NULL)
 			goto out;
 		/* 0 chars */
-		if (strcmp(header, "0"))
+		if (strcmp(header, "0")) {
+			free((void*)header);
 			goto out;
-		free((char *)header);
+		}
+		free((void *)header);
 
 		test_ok = 2;
 
@@ -3223,26 +3238,30 @@ static void
 http_primitives(void *ptr)
 {
 	char *escaped = NULL;
-	struct evhttp *http;
+	struct evhttp *http = NULL;
 
 	escaped = evhttp_htmlescape("<script>");
+	tt_assert(escaped);
 	tt_str_op(escaped, ==, "&lt;script&gt;");
 	free(escaped);
 
 	escaped = evhttp_htmlescape("\"\'&");
+	tt_assert(escaped);
 	tt_str_op(escaped, ==, "&quot;&#039;&amp;");
 
 	http = evhttp_new(NULL);
+	tt_assert(http);
 	tt_int_op(evhttp_set_cb(http, "/test", http_basic_cb, NULL), ==, 0);
 	tt_int_op(evhttp_set_cb(http, "/test", http_basic_cb, NULL), ==, -1);
 	tt_int_op(evhttp_del_cb(http, "/test"), ==, 0);
 	tt_int_op(evhttp_del_cb(http, "/test"), ==, -1);
 	tt_int_op(evhttp_set_cb(http, "/test", http_basic_cb, NULL), ==, 0);
-	evhttp_free(http);
 
  end:
 	if (escaped)
 		free(escaped);
+	if (http)
+		evhttp_free(http);
 }
 
 static void
@@ -3269,6 +3288,8 @@ http_multi_line_header_test(void *arg)
 	    "GET /test HTTP/1.1\r\n"
 	    "Host: somehost\r\n"
 	    "Connection: close\r\n"
+	    "X-Multi-Extra-WS:  libevent  \r\n"
+	    "\t\t\t2.1 \r\n"
 	    "X-Multi:  aaaaaaaa\r\n"
 	    " a\r\n"
 	    "\tEND\r\n"
@@ -3276,9 +3297,12 @@ http_multi_line_header_test(void *arg)
 	    "\r\n";
 
 	bufferevent_write(bev, http_start_request, strlen(http_start_request));
+	found_multi = found_multi2 = 0;
 
 	event_base_dispatch(data->base);
 
+	tt_int_op(found_multi, ==, 1);
+	tt_int_op(found_multi2, ==, 1);
 	tt_int_op(test_ok, ==, 4);
  end:
 	if (bev)

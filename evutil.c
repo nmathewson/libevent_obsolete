@@ -35,6 +35,7 @@
 #undef WIN32_LEAN_AND_MEAN
 #include <io.h>
 #include <tchar.h>
+#include <process.h>
 #undef _WIN32_WINNT
 /* For structs needed by GetAdaptersAddresses */
 #define _WIN32_WINNT 0x0501
@@ -88,8 +89,12 @@
 #define open _open
 #define read _read
 #define close _close
+#ifndef fstat
 #define fstat _fstati64
+#endif
+#ifndef stat
 #define stat _stati64
+#endif
 #define mode_t int
 #endif
 
@@ -99,24 +104,20 @@ evutil_open_closeonexec_(const char *pathname, int flags, unsigned mode)
 	int fd;
 
 #ifdef O_CLOEXEC
-	if (flags & O_CREAT)
-		fd = open(pathname, flags|O_CLOEXEC, (mode_t)mode);
-	else
-		fd = open(pathname, flags|O_CLOEXEC);
+	fd = open(pathname, flags|O_CLOEXEC, (mode_t)mode);
 	if (fd >= 0 || errno == EINVAL)
 		return fd;
 	/* If we got an EINVAL, fall through and try without O_CLOEXEC */
 #endif
-	if (flags & O_CREAT)
-		fd = open(pathname, flags, (mode_t)mode);
-	else
-		fd = open(pathname, flags);
+	fd = open(pathname, flags, (mode_t)mode);
 	if (fd < 0)
 		return -1;
 
 #if defined(FD_CLOEXEC)
-	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+		close(fd);
 		return -1;
+	}
 #endif
 
 	return fd;
@@ -269,7 +270,6 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 		goto tidy_up_and_fail;
 	if (size != sizeof(listen_addr))
 		goto abort_tidy_up_and_fail;
-	evutil_closesocket(listener);
 	/* Now check we are talking to ourself by matching port and host on the
 	   two sockets.	 */
 	if (getsockname(connector, (struct sockaddr *) &connect_addr, &size) == -1)
@@ -279,6 +279,7 @@ evutil_ersatz_socketpair_(int family, int type, int protocol,
 		|| listen_addr.sin_addr.s_addr != connect_addr.sin_addr.s_addr
 		|| listen_addr.sin_port != connect_addr.sin_port)
 		goto abort_tidy_up_and_fail;
+	evutil_closesocket(listener);
 	fd[0] = connector;
 	fd[1] = acceptor;
 
@@ -2219,6 +2220,27 @@ int evutil_ascii_strncasecmp(const char *s1, const char *s2, size_t n)
 			return 0;
 	}
 	return 0;
+}
+
+void
+evutil_rtrim_lws_(char *str)
+{
+	char *cp;
+
+	if (str == NULL)
+		return;
+
+	if ((cp = strchr(str, '\0')) == NULL || (cp == str))
+		return;
+
+	--cp;
+
+	while (*cp == ' ' || *cp == '\t') {
+		*cp = '\0';
+		if (cp == str)
+			break;
+		--cp;
+	}
 }
 
 static int

@@ -104,7 +104,7 @@ test_edgetriggered(void *et)
 
 	called = was_et = 0;
 
-	send(pair[0], test, (int)strlen(test)+1, 0);
+	tt_int_op(send(pair[0], test, (int)strlen(test)+1, 0), >, 0);
 	shutdown(pair[0], SHUT_WR);
 
 	/* Initalize the event library */
@@ -173,7 +173,9 @@ test_edgetriggered_mix_error(void *data_)
 
 	/* try mixing edge-triggered and level-triggered to make sure it fails*/
 	ev_et = event_new(base, data->pair[0], EV_READ|EV_ET, read_cb, ev_et);
+	tt_assert(ev_et);
 	ev_lt = event_new(base, data->pair[0], EV_READ, read_cb, ev_lt);
+	tt_assert(ev_lt);
 
 	/* Add edge-triggered, then level-triggered.  Get an error. */
 	tt_int_op(0, ==, event_add(ev_et, NULL));

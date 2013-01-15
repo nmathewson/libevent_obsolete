@@ -227,29 +227,32 @@ evconnlistener_new_bind(struct event_base *base, evconnlistener_cb cb,
 	if (fd == -1)
 		return NULL;
 
-	setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void*)&on, sizeof(on));
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void*)&on, sizeof(on))<0)
+		goto err;
+
 	if (flags & LEV_OPT_REUSEABLE) {
-		evutil_make_listen_socket_reuseable(fd);
+		if (evutil_make_listen_socket_reuseable(fd) < 0)
+			goto err;
 	}
 
 	if (flags & LEV_OPT_DEFERRED_ACCEPT) {
-		evutil_make_tcp_listen_socket_deferred(fd);
+		if (evutil_make_tcp_listen_socket_deferred(fd) < 0)
+			goto err;
 	}
 
 	if (sa) {
-		if (bind(fd, sa, socklen)<0) {
-			evutil_closesocket(fd);
-			return NULL;
-		}
+		if (bind(fd, sa, socklen)<0)
+			goto err;
 	}
 
 	listener = evconnlistener_new(base, cb, ptr, flags, backlog, fd);
-	if (!listener) {
-		evutil_closesocket(fd);
-		return NULL;
-	}
+	if (!listener)
+		goto err;
 
 	return listener;
+err:
+	evutil_closesocket(fd);
+	return NULL;
 }
 
 void
@@ -399,6 +402,7 @@ listener_read_cb(evutil_socket_t fd, short what, void *p)
 		}
 
 		if (lev->cb == NULL) {
+			evutil_closesocket(new_fd);
 			UNLOCK(lev);
 			return;
 		}
@@ -440,7 +444,7 @@ struct accepting_socket {
 	struct event_overlapped overlapped;
 	SOCKET s;
 	int error;
-	struct deferred_cb deferred;
+	struct event_callback deferred;
 	struct evconnlistener_iocp *lev;
 	ev_uint8_t buflen;
 	ev_uint8_t family;
@@ -450,7 +454,7 @@ struct accepting_socket {
 
 static void accepted_socket_cb(struct event_overlapped *o, ev_uintptr_t key,
     ev_ssize_t n, int ok);
-static void accepted_socket_invoke_user_cb(struct deferred_cb *cb, void *arg);
+static void accepted_socket_invoke_user_cb(struct event_callback *cb, void *arg);
 
 static void
 iocp_listener_event_add(struct evconnlistener_iocp *lev)
@@ -498,7 +502,8 @@ new_accepting_socket(struct evconnlistener_iocp *lev, int family)
 	res->family = family;
 
 	event_deferred_cb_init_(&res->deferred,
-		accepted_socket_invoke_user_cb, res);
+	    event_base_get_npriorities(lev->event_base) / 2,
+	    accepted_socket_invoke_user_cb, res);
 
 	InitializeCriticalSectionAndSpinCount(&res->lock, 1000);
 
@@ -566,7 +571,7 @@ start_accepting(struct accepting_socket *as)
 report_err:
 	as->error = error;
 	event_deferred_cb_schedule_(
-		event_base_get_deferred_cb_queue_(as->lev->event_base),
+		as->lev->event_base,
 		&as->deferred);
 	return 0;
 }
@@ -581,7 +586,7 @@ stop_accepting(struct accepting_socket *as)
 }
 
 static void
-accepted_socket_invoke_user_cb(struct deferred_cb *dcb, void *arg)
+accepted_socket_invoke_user_cb(struct event_callback *dcb, void *arg)
 {
 	struct accepting_socket *as = arg;
 
@@ -658,7 +663,7 @@ accepted_socket_cb(struct event_overlapped *o, ev_uintptr_t key, ev_ssize_t n, i
 	if (ok) {
 		/* XXXX Don't do this if some EV_MT flag is set. */
 		event_deferred_cb_schedule_(
-			event_base_get_deferred_cb_queue_(as->lev->event_base),
+			as->lev->event_base,
 			&as->deferred);
 		LeaveCriticalSection(&as->lock);
 	} else if (as->free_on_cb) {
@@ -683,7 +688,7 @@ accepted_socket_cb(struct event_overlapped *o, ev_uintptr_t key, ev_ssize_t n, i
 			as->error = WSAGetLastError();
 		}
 		event_deferred_cb_schedule_(
-			event_base_get_deferred_cb_queue_(as->lev->event_base),
+			as->lev->event_base,
 			&as->deferred);
 		LeaveCriticalSection(&as->lock);
 	}
@@ -733,6 +738,10 @@ iocp_listener_disable_impl(struct evconnlistener *lev, int shutdown)
 		}
 		LeaveCriticalSection(&as->lock);
 	}
+
+	if (shutdown && lev->flags & LEV_OPT_CLOSE_ON_FREE)
+		evutil_closesocket(lev_iocp->fd);
+
 	UNLOCK(lev);
 	return 0;
 }

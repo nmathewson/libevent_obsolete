@@ -60,29 +60,32 @@
  */
 
 static int fired;
-static int *pipes;
+static evutil_socket_t *pipes;
 static struct event *events;
 
 static void
 read_cb(evutil_socket_t fd, short which, void *arg)
 {
 	char ch;
-	long idx = (long) arg;
+	evutil_socket_t sock = (evutil_socket_t)(ev_intptr_t)arg;
 
 	recv(fd, &ch, sizeof(ch), 0);
-	if (idx >= 0)
-		send(idx, "e", 1, 0);
+	if (sock >= 0) {
+		if (send(sock, "e", 1, 0) < 0)
+			perror("send");
+	}
 	fired++;
 }
 
 static struct timeval *
 run_once(int num_pipes)
 {
-	int *cp, i;
+	int i;
+	evutil_socket_t *cp;
 	static struct timeval ts, te, tv_timeout;
 
 	events = calloc(num_pipes, sizeof(struct event));
-	pipes = calloc(num_pipes * 2, sizeof(int));
+	pipes = calloc(num_pipes * 2, sizeof(evutil_socket_t));
 
 	if (events == NULL || pipes == NULL) {
 		perror("malloc");
@@ -104,15 +107,17 @@ run_once(int num_pipes)
 	tv_timeout.tv_sec = 60;
 
 	for (cp = pipes, i = 0; i < num_pipes; i++, cp += 2) {
-		long fd = i < num_pipes - 1 ? cp[3] : -1;
-		event_set(&events[i], cp[0], EV_READ, read_cb, (void *) fd);
+		evutil_socket_t fd = i < num_pipes - 1 ? cp[3] : -1;
+		event_set(&events[i], cp[0], EV_READ, read_cb,
+		    (void *)(ev_intptr_t)fd);
 		event_add(&events[i], &tv_timeout);
 	}
 
 	fired = 0;
 
 	/* kick everything off with a single write */
-	send(pipes[1], "e", 1, 0);
+	if (send(pipes[1], "e", 1, 0) < 0)
+		perror("send");
 
 	event_dispatch();
 

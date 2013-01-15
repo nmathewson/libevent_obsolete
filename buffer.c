@@ -142,7 +142,7 @@
 static void evbuffer_chain_align(struct evbuffer_chain *chain);
 static int evbuffer_chain_should_realign(struct evbuffer_chain *chain,
     size_t datalen);
-static void evbuffer_deferred_callback(struct deferred_cb *cb, void *arg);
+static void evbuffer_deferred_callback(struct event_callback *cb, void *arg);
 static int evbuffer_ptr_memcmp(const struct evbuffer *buf,
     const struct evbuffer_ptr *pos, const char *mem, size_t len);
 static struct evbuffer_chain *evbuffer_expand_singlechain(struct evbuffer *buf,
@@ -402,9 +402,10 @@ int
 evbuffer_defer_callbacks(struct evbuffer *buffer, struct event_base *base)
 {
 	EVBUFFER_LOCK(buffer);
-	buffer->cb_queue = event_base_get_deferred_cb_queue_(base);
+	buffer->cb_queue = base;
 	buffer->deferred_cbs = 1;
 	event_deferred_cb_init_(&buffer->deferred,
+	    event_base_get_npriorities(base) / 2,
 	    evbuffer_deferred_callback, buffer);
 	EVBUFFER_UNLOCK(buffer);
 	return 0;
@@ -509,20 +510,19 @@ evbuffer_invoke_callbacks_(struct evbuffer *buffer)
 	}
 
 	if (buffer->deferred_cbs) {
-		if (buffer->deferred.queued)
-			return;
-		evbuffer_incref_and_lock_(buffer);
-		if (buffer->parent)
-			bufferevent_incref_(buffer->parent);
+		if (event_deferred_cb_schedule_(buffer->cb_queue, &buffer->deferred)) {
+			evbuffer_incref_and_lock_(buffer);
+			if (buffer->parent)
+				bufferevent_incref_(buffer->parent);
+		}
 		EVBUFFER_UNLOCK(buffer);
-		event_deferred_cb_schedule_(buffer->cb_queue, &buffer->deferred);
 	}
 
 	evbuffer_run_callbacks(buffer, 0);
 }
 
 static void
-evbuffer_deferred_callback(struct deferred_cb *cb, void *arg)
+evbuffer_deferred_callback(struct event_callback *cb, void *arg)
 {
 	struct bufferevent *parent = NULL;
 	struct evbuffer *buffer = arg;
@@ -2382,6 +2382,9 @@ evbuffer_write_iovec(struct evbuffer *buffer, evutil_socket_t fd,
 		}
 		chain = chain->next;
 	}
+	if (! i)
+		return 0;
+
 #ifdef _WIN32
 	{
 		DWORD bytesSent;
@@ -2889,11 +2892,18 @@ evbuffer_file_segment_new(
 	seg->fd = fd;
 	seg->flags = flags;
 	seg->file_offset = offset;
-
+	seg->cleanup_cb = NULL;
+	seg->cleanup_cb_arg = NULL;
 #ifdef _WIN32
+#ifndef lseek
 #define lseek _lseeki64
+#endif
+#ifndef fstat
 #define fstat _fstat
+#endif
+#ifndef stat
 #define stat _stat
+#endif
 #endif
 	if (length == -1) {
 		struct stat st;
@@ -2981,10 +2991,10 @@ evbuffer_file_segment_materialize(struct evbuffer_file_segment *seg)
 #endif
 #ifdef _WIN32
 	if (!(flags & EVBUF_FS_DISABLE_MMAP)) {
-		long h = (long)_get_osfhandle(fd);
+		intptr_t h = _get_osfhandle(fd);
 		HANDLE m;
 		ev_uint64_t total_size = length+offset;
-		if (h == (long)INVALID_HANDLE_VALUE)
+		if ((HANDLE)h == INVALID_HANDLE_VALUE)
 			goto err;
 		m = CreateFileMapping((HANDLE)h, NULL, PAGE_READONLY,
 		    (total_size >> 32), total_size & 0xfffffffful,
@@ -3040,6 +3050,14 @@ err:
 	return -1;
 }
 
+void evbuffer_file_segment_add_cleanup_cb(struct evbuffer_file_segment *seg,
+	evbuffer_file_segment_cleanup_cb cb, void* arg)
+{
+	EVUTIL_ASSERT(seg->refcnt > 0);
+	seg->cleanup_cb = cb;
+	seg->cleanup_cb_arg = arg;
+}
+
 void
 evbuffer_file_segment_free(struct evbuffer_file_segment *seg)
 {
@@ -3064,6 +3082,13 @@ evbuffer_file_segment_free(struct evbuffer_file_segment *seg)
 
 	if ((seg->flags & EVBUF_FS_CLOSE_ON_FREE) && seg->fd >= 0) {
 		close(seg->fd);
+	}
+	
+	if (seg->cleanup_cb) {
+		(*seg->cleanup_cb)((struct evbuffer_file_segment const*)seg, 
+		    seg->flags, seg->cleanup_cb_arg);
+		seg->cleanup_cb = NULL;
+		seg->cleanup_cb_arg = NULL;
 	}
 
 	EVTHREAD_FREE_LOCK(seg->lock, 0);
@@ -3181,7 +3206,8 @@ evbuffer_add_file(struct evbuffer *buf, int fd, ev_off_t offset, ev_off_t length
 	if (!seg)
 		return -1;
 	r = evbuffer_add_file_segment(buf, seg, 0, length);
-	evbuffer_file_segment_free(seg);
+	if (r == 0)
+		evbuffer_file_segment_free(seg);
 	return r;
 }
 

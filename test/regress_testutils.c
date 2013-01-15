@@ -101,7 +101,7 @@ regress_get_dnsserver(struct event_base *base,
 	struct sockaddr_in my_addr;
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock <= 0) {
+	if (sock < 0) {
 		tt_abort_perror("socket");
 	}
 
@@ -112,6 +112,7 @@ regress_get_dnsserver(struct event_base *base,
 	my_addr.sin_port = htons(*portnum);
 	my_addr.sin_addr.s_addr = htonl(0x7f000001UL);
 	if (bind(sock, (struct sockaddr*)&my_addr, sizeof(my_addr)) < 0) {
+		evutil_closesocket(sock);
 		tt_abort_perror("bind");
 	}
 	port = evdns_add_server_port_with_base(base, sock, 0, cb, arg);
@@ -177,12 +178,16 @@ regress_dns_server_cb(struct evdns_server_request *req, void *data)
 		return;
 	} else if (!strcmp(tab->anstype, "A")) {
 		struct in_addr in;
-		evutil_inet_pton(AF_INET, tab->ans, &in);
+		if (!evutil_inet_pton(AF_INET, tab->ans, &in)) {
+			TT_DIE(("Bad A value %s in table", tab->ans));
+		}
 		evdns_server_request_add_a_reply(req, question, 1, &in.s_addr,
 		    100);
 	} else if (!strcmp(tab->anstype, "AAAA")) {
 		struct in6_addr in6;
-		evutil_inet_pton(AF_INET6, tab->ans, &in6);
+		if (!evutil_inet_pton(AF_INET6, tab->ans, &in6)) {
+			TT_DIE(("Bad AAAA value %s in table", tab->ans));
+		}
 		evdns_server_request_add_aaaa_reply(req,
 		    question, 1, &in6.s6_addr, 100);
 	} else {

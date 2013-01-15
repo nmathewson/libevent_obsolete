@@ -95,18 +95,18 @@ main(int argc, char **argv)
 #ifdef _WIN32
 	WORD wVersionRequested;
 	WSADATA wsaData;
-	int	err;
 
 	wVersionRequested = MAKEWORD(2, 2);
 
-	err = WSAStartup(wVersionRequested, &wsaData);
+	(void) WSAStartup(wVersionRequested, &wsaData);
 #endif
 
 	if (evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == -1)
 		return (1);
 
 
-	send(pair[0], test, (int)strlen(test)+1, 0);
+	if (send(pair[0], test, (int)strlen(test)+1, 0) < 0)
+		return (1);
 	shutdown(pair[0], SHUT_WR);
 
 	/* Initalize the event library */

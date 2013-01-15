@@ -57,6 +57,7 @@
 #include "event2/buffer_compat.h"
 #include "event2/util.h"
 
+#include "defer-internal.h"
 #include "evbuffer-internal.h"
 #include "log-internal.h"
 
@@ -658,7 +659,7 @@ addfile_test_readcb(evutil_socket_t fd, short what, void *arg)
 	struct evbuffer *b = arg;
 	int e, r = 0;
 	do {
-		int r = evbuffer_read(b, fd, 1024);
+		r = evbuffer_read(b, fd, 1024);
 		if (r > 0) {
 			addfile_test_total_read += r;
 			TT_BLATHER(("Read %d/%d bytes", r, addfile_test_total_read));
@@ -862,6 +863,71 @@ test_evbuffer_add_file(void *ptr)
 		evutil_closesocket(pair[0]);
 	if (pair[1] >= 0)
 		evutil_closesocket(pair[1]);
+	if (tmpfilename) {
+		unlink(tmpfilename);
+		free(tmpfilename);
+	}
+}
+
+static int file_segment_cleanup_cb_called_count = 0;
+static struct evbuffer_file_segment const* file_segment_cleanup_cb_called_with = NULL;
+static int file_segment_cleanup_cb_called_with_flags = 0;
+static void* file_segment_cleanup_cb_called_with_arg = NULL;
+static void
+file_segment_cleanup_cp(struct evbuffer_file_segment const* seg, int flags, void* arg)
+{
+	++file_segment_cleanup_cb_called_count;
+	file_segment_cleanup_cb_called_with = seg;
+	file_segment_cleanup_cb_called_with_flags = flags;
+	file_segment_cleanup_cb_called_with_arg = arg;
+}
+
+static void
+test_evbuffer_file_segment_add_cleanup_cb(void* ptr)
+{
+	char *tmpfilename = NULL;
+	int fd = -1;
+	struct evbuffer *evb = NULL;
+	struct evbuffer_file_segment *seg = NULL;
+	char const* arg = "token";
+
+	fd = regress_make_tmpfile("file_segment_test_file", 22, &tmpfilename);
+
+	evb = evbuffer_new();
+	tt_assert(evb);
+
+	seg = evbuffer_file_segment_new(fd, 0, -1, 0);
+	tt_assert(seg);
+
+	evbuffer_file_segment_add_cleanup_cb(
+	  seg, &file_segment_cleanup_cp, (void*)arg);
+
+	tt_assert(fd != -1);
+
+	tt_assert(evbuffer_add_file_segment(evb, seg, 0, -1)!=-1);
+	
+	evbuffer_validate(evb);
+
+	tt_int_op(file_segment_cleanup_cb_called_count, ==, 0);
+	evbuffer_file_segment_free(seg);
+
+	tt_int_op(file_segment_cleanup_cb_called_count, ==, 0);
+	evbuffer_free(evb);
+	
+	tt_int_op(file_segment_cleanup_cb_called_count, ==, 1);
+	tt_assert(file_segment_cleanup_cb_called_with == seg);
+	tt_assert(file_segment_cleanup_cb_called_with_flags == 0);
+	tt_assert(file_segment_cleanup_cb_called_with_arg == (void*)arg);
+	
+	seg = NULL;
+	evb = NULL;
+
+end:
+	
+	if(evb) 
+	  evbuffer_free(evb);
+	if(seg)
+	  evbuffer_file_segment_free(seg);
 	if (tmpfilename) {
 		unlink(tmpfilename);
 		free(tmpfilename);
@@ -1231,6 +1297,8 @@ test_evbuffer_find(void *ptr)
 	unsigned int i;
 	struct evbuffer * buf = evbuffer_new();
 
+	tt_assert(buf);
+
 	/* make sure evbuffer_find doesn't match past the end of the buffer */
 	evbuffer_add(buf, (u_char*)test1, strlen(test1));
 	evbuffer_validate(buf);
@@ -1271,6 +1339,8 @@ test_evbuffer_ptr_set(void *ptr)
 	struct evbuffer *buf = evbuffer_new();
 	struct evbuffer_ptr pos;
 	struct evbuffer_iovec v[1];
+
+	tt_assert(buf);
 
 	tt_int_op(evbuffer_get_length(buf), ==, 0);
 
@@ -1329,6 +1399,9 @@ test_evbuffer_search(void *ptr)
 	struct evbuffer *buf = evbuffer_new();
 	struct evbuffer *tmp = evbuffer_new();
 	struct evbuffer_ptr pos, end;
+
+	tt_assert(buf);
+	tt_assert(tmp);
 
 	pos = evbuffer_search(buf, "x", 1, NULL);
 	tt_int_op(pos.pos, ==, -1);
@@ -1434,6 +1507,10 @@ test_evbuffer_callbacks(void *ptr)
 	struct evbuffer *buf_out1 = evbuffer_new();
 	struct evbuffer *buf_out2 = evbuffer_new();
 	struct evbuffer_cb_entry *cb1, *cb2;
+
+	tt_assert(buf);
+	tt_assert(buf_out1);
+	tt_assert(buf_out2);
 
 	cb1 = evbuffer_add_cb(buf, log_change_callback, buf_out1);
 	cb2 = evbuffer_add_cb(buf, log_change_callback, buf_out2);
@@ -1981,6 +2058,8 @@ test_evbuffer_add_iovec(void * ptr)
 
 	buf = evbuffer_new();
 
+	tt_assert(buf);
+
 	for (i = 0; i < 4; i++) {
 		vec[i].iov_len  = strlen(data[i]);
 		vec[i].iov_base = (char*) data[i];
@@ -2130,6 +2209,7 @@ struct testcase_t evbuffer_testcases[] = {
 	{ "freeze_end", test_evbuffer_freeze, 0, &nil_setup, (void*)"end" },
 	{ "add_iovec", test_evbuffer_add_iovec, 0, NULL, NULL},
 	{ "copyout", test_evbuffer_copyout, 0, NULL, NULL},
+	{ "file_segment_add_cleanup_cb", test_evbuffer_file_segment_add_cleanup_cb, 0, NULL, NULL },
 
 #define ADDFILE_TEST(name, parameters)					\
 	{ name, test_evbuffer_add_file, TT_FORK|TT_NEED_BASE,		\

@@ -248,7 +248,8 @@ win32_del(struct event_base *base, evutil_socket_t fd, short old, short events,
 	struct win32op *win32op = base->evbase;
 	struct idx_info *idx = idx_;
 
-	event_debug(("%s: Removing event for %d", __func__, fd));
+	event_debug(("%s: Removing event for "EV_SOCK_FMT,
+		__func__, EV_SOCK_ARG(fd)));
 	if (events & EV_READ)
 		do_fd_clear(base, win32op, idx, 1);
 	if (events & EV_WRITE)
@@ -304,7 +305,7 @@ win32_dispatch(struct event_base *base, struct timeval *tv)
 	    win32op->readset_out->fd_count : win32op->writeset_out->fd_count;
 
 	if (!fd_count) {
-		long msec = evutil_tv_to_msec_(tv);
+		long msec = tv ? evutil_tv_to_msec_(tv) : LONG_MAX;
 		/* Sleep's DWORD argument is unsigned long */
 		if (msec < 0)
 			msec = LONG_MAX;

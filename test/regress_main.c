@@ -59,6 +59,9 @@
 #endif
 
 #include <sys/types.h>
+#ifdef EVENT__HAVE_SYS_STAT_H
+#include <sys/stat.h>
+#endif
 
 #ifndef _WIN32
 #include <sys/socket.h>
@@ -125,6 +128,9 @@ regress_make_tmpfile(const void *data, size_t datalen, char **filename_out)
 	int fd;
 	*filename_out = NULL;
 	strcpy(tmpfilename, "/tmp/eventtmp.XXXXXX");
+#ifdef EVENT__HAVE_UMASK
+	umask(0077);
+#endif
 	fd = mkstemp(tmpfilename);
 	if (fd == -1)
 		return (-1);
@@ -305,7 +311,7 @@ static void *
 legacy_test_setup(const struct testcase_t *testcase)
 {
 	struct basic_test_data *data = basic_test_setup(testcase);
-	if (data == (void*)TT_SKIP)
+	if (data == (void*)TT_SKIP || data == NULL)
 		return data;
 	global_base = data->base;
 	pair[0] = data->pair[0];
@@ -386,17 +392,36 @@ struct testgroup_t testgroups[] = {
 	END_OF_GROUPS
 };
 
+const char *alltests[] = { "+..", NULL };
+const char *livenettests[] = {
+	"+util/getaddrinfo_live",
+	"+dns/gethostby..",
+	"+dns/resolve_reverse",
+	NULL
+};
+const char *finetimetests[] = {
+	"+util/monotonic_res_precise",
+	"+util/monotonic_res_fallback",
+	"+thread/deferred_cb_skew",
+	NULL
+};
+struct testlist_alias_t testaliases[] = {
+	{ "all", alltests },
+	{ "live_net", livenettests },
+	{ "fine_timing", finetimetests },
+	END_OF_ALIASES
+};
+
 int
 main(int argc, const char **argv)
 {
 #ifdef _WIN32
 	WORD wVersionRequested;
 	WSADATA wsaData;
-	int	err;
 
 	wVersionRequested = MAKEWORD(2, 2);
 
-	err = WSAStartup(wVersionRequested, &wsaData);
+	(void) WSAStartup(wVersionRequested, &wsaData);
 #endif
 
 #ifndef _WIN32
@@ -410,8 +435,10 @@ main(int argc, const char **argv)
 
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
 	if (!getenv("EVENT_NO_DEBUG_LOCKS"))
-		evthread_enable_lock_debuging();
+		evthread_enable_lock_debugging();
 #endif
+
+	tinytest_set_aliases(testaliases);
 
 	if (tinytest_main(argc,argv,testgroups))
 		return 1;

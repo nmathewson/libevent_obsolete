@@ -174,11 +174,10 @@ main(int argc, char **argv)
 #ifdef _WIN32
 	WORD wVersionRequested;
 	WSADATA wsaData;
-	int	err;
 
 	wVersionRequested = MAKEWORD(2, 2);
 
-	err = WSAStartup(wVersionRequested, &wsaData);
+	(void) WSAStartup(wVersionRequested, &wsaData);
 #endif
 	if (evutil_socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == -1)
 		return (1);
@@ -201,6 +200,10 @@ main(int argc, char **argv)
 	start_cpu_usage_timer(&timer);
 
 	event_base_dispatch(base);
+
+	event_free(ev);
+	event_free(timeout);
+	event_base_free(base);
 
 	get_cpu_usage(&timer, &secPassed, &secUsed, &usage);
 

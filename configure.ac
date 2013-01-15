@@ -5,16 +5,16 @@ dnl See LICENSE for copying information.
 dnl
 dnl Original version Dug Song <dugsong@monkey.org>
 
+AC_INIT(libevent,2.1.2-alpha-dev)
 AC_PREREQ(2.59)
-AC_INIT(event.c)
+AC_CONFIG_SRCDIR(event.c)
 
 AC_CONFIG_MACRO_DIR([m4])
-
-AM_INIT_AUTOMAKE(libevent,2.1.1-alpha-dev)
+AM_INIT_AUTOMAKE
 dnl AM_SILENT_RULES req. automake 1.11.  [no] defaults V=1
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([no])])
+m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AM_CONFIG_HEADER(config.h  evconfig-private.h:evconfig-private.h.in)
-AC_DEFINE(NUMERIC_VERSION, 0x02010101, [Numeric representation of the version])
+AC_DEFINE(NUMERIC_VERSION, 0x02010201, [Numeric representation of the version])
 
 dnl Initialize prefix.
 if test "$prefix" = "NONE"; then
@@ -44,6 +44,7 @@ dnl the 'host' machine is where the resulting stuff runs.
 
 dnl Checks for programs.
 AM_PROG_CC_C_O
+AC_PROG_SED
 AC_PROG_INSTALL
 AC_PROG_LN_S
 # AC_PROG_MKDIR_P - $(MKDIR_P) should be defined by AM_INIT_AUTOMAKE
@@ -115,7 +116,7 @@ AC_ARG_ENABLE([verbose-debug],
 
 AC_PROG_LIBTOOL
 
-dnl   Uncomment "AC_DISABLE_SHARED" to make shared librraries not get
+dnl   Uncomment "AC_DISABLE_SHARED" to make shared libraries not get
 dnl   built by default.  You can also turn shared libs on and off from
 dnl   the command line with --enable-shared and --disable-shared.
 dnl AC_DISABLE_SHARED
@@ -216,11 +217,13 @@ AC_CHECK_HEADERS([ \
   sys/select.h \
   sys/sendfile.h \
   sys/socket.h \
+  sys/stat.h \
   sys/time.h \
   sys/timerfd.h \
   sys/uio.h \
   sys/wait.h \
 ])
+
 AC_CHECK_HEADERS(sys/sysctl.h, [], [], [
 #ifdef HAVE_SYS_PARAM_H
 #include <sys/param.h>
@@ -354,6 +357,7 @@ AC_CHECK_FUNCS([ \
   strtoll \
   sysctl \
   timerfd_create \
+  umask \
   unsetenv \
   usleep \
   vasprintf \
@@ -882,4 +886,4 @@ AC_SUBST([LIBEVENT_GC_SECTIONS])
 AM_CONDITIONAL([INSTALL_LIBEVENT], [test "$enable_libevent_install" = "yes"])
 
 AC_CONFIG_FILES( [libevent.pc libevent_openssl.pc libevent_pthreads.pc] )
-AC_OUTPUT(Makefile include/Makefile test/Makefile sample/Makefile)
+AC_OUTPUT(Makefile)

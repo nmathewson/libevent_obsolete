@@ -115,11 +115,12 @@ frob_socket(evutil_socket_t sock)
 {
 	struct linger l;
 	int one = 1;
-	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*)&one, sizeof(one));
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (void*)&one, sizeof(one))<0)
+		perror("setsockopt(SO_REUSEADDR)");
 	l.l_onoff = 1;
 	l.l_linger = 0;
 	if (setsockopt(sock, SOL_SOCKET, SO_LINGER, (void*)&l, sizeof(l))<0)
-		perror("setsockopt");
+		perror("setsockopt(SO_LINGER)");
 }
 
 static int
@@ -140,12 +141,15 @@ launch_request(void)
 	sin.sin_port = htons(8080);
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		return -1;
-	if (evutil_make_socket_nonblocking(sock) < 0)
+	if (evutil_make_socket_nonblocking(sock) < 0) {
+		evutil_closesocket(sock);
 		return -1;
+	}
 	frob_socket(sock);
 	if (connect(sock, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
 		int e = errno;
 		if (! EVUTIL_ERR_CONNECT_RETRIABLE(e)) {
+			evutil_closesocket(sock);
 			return -1;
 		}
 	}
@@ -190,7 +194,7 @@ main(int argc, char **argv)
 
 	evutil_gettimeofday(&end, NULL);
 	evutil_timersub(&end, &start, &total);
-	usec = total_time.tv_sec * 1000000 + total_time.tv_usec;
+	usec = total_time.tv_sec * (long long)1000000 + total_time.tv_usec;
 
 	if (!total_n_handled) {
 		puts("Nothing worked.  You probably did something dumb.");

@@ -218,6 +218,11 @@ int EVUTIL_ISUPPER_(char c);
 char EVUTIL_TOUPPER_(char c);
 char EVUTIL_TOLOWER_(char c);
 
+/** Remove all trailing horizontal whitespace (space or tab) from the end of a
+ * string */
+void evutil_rtrim_lws_(char *);
+
+
 /** Helper macro.  If we know that a given pointer points to a field in a
     structure, return a pointer to the structure itself.  Used to implement
     our half-baked C OO.  Example:
@@ -391,6 +396,14 @@ HANDLE evutil_load_windows_system_library_(const TCHAR *library_name);
 #define EV_I64_ARG(x) ((long long)(x))
 #define EV_U64_ARG(x) ((unsigned long long)(x))
 #endif
+#endif
+
+#ifdef _WIN32
+#define EV_SOCK_FMT EV_I64_FMT
+#define EV_SOCK_ARG(x) EV_I64_ARG((x))
+#else
+#define EV_SOCK_FMT "%d"
+#define EV_SOCK_ARG(x) (x)
 #endif
 
 #if defined(__STDC__) && defined(__STDC_VERSION__)
