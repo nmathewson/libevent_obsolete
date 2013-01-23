@@ -103,6 +103,9 @@ extern "C" {
 
 #else
 
+#define EVUTIL_ERR_IS_EAGAIN(e) \
+	((e) == EAGAIN)
+
 #define EVUTIL_ERR_RW_RETRIABLE(e)					\
 	((e) == WSAEWOULDBLOCK ||					\
 	    (e) == WSAEINTR)
