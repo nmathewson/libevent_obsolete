@@ -13,7 +13,7 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 dnl AM_SILENT_RULES req. automake 1.11.  [no] defaults V=1
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
-AM_CONFIG_HEADER(config.h  evconfig-private.h:evconfig-private.h.in)
+AC_CONFIG_HEADERS(config.h  evconfig-private.h:evconfig-private.h.in)
 AC_DEFINE(NUMERIC_VERSION, 0x02010201, [Numeric representation of the version])
 
 dnl Initialize prefix.
@@ -676,6 +676,14 @@ AC_CHECK_MEMBERS([struct in6_addr.s6_addr32, struct in6_addr.s6_addr16, struct s
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
+#endif
+])
+
+AC_CHECK_TYPES([struct so_linger],
+[#define HAVE_SO_LINGER], ,
+[
+#ifdef HAVE_SYS_SOCKET_H
+#include <sys/socket.h>
 #endif
 ])
 

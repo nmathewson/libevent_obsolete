@@ -2157,7 +2157,7 @@ evthread_notify_base_default(struct event_base *base)
 #else
 	r = write(base->th_notify_fd[1], buf, 1);
 #endif
-	return (r < 0 && errno != EAGAIN) ? -1 : 0;
+	return (r < 0 && ! EVUTIL_ERR_IS_EAGAIN(errno)) ? -1 : 0;
 }
 
 #ifdef EVENT__HAVE_EVENTFD
@@ -2207,6 +2207,7 @@ event_remove_timer_nolock_(struct event *ev)
 	/* If it's not pending on a timeout, we don't need to do anything. */
 	if (ev->ev_flags & EVLIST_TIMEOUT) {
 		event_queue_remove_timeout(base, ev);
+		evutil_timerclear(&ev->ev_.ev_io.ev_timeout);
 	}
 
 	return (0);
