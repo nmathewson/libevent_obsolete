@@ -362,6 +362,7 @@ void evutil_set_evdns_getaddrinfo_fn_(evdns_getaddrinfo_fn fn);
 
 struct evutil_addrinfo *evutil_new_addrinfo_(struct sockaddr *sa,
     ev_socklen_t socklen, const struct evutil_addrinfo *hints);
+struct evutil_addrinfo *evutil_dupe_addrinfo_(struct evutil_addrinfo *ai);
 struct evutil_addrinfo *evutil_addrinfo_append_(struct evutil_addrinfo *first,
     struct evutil_addrinfo *append);
 void evutil_adjust_hints_for_addrconfig_(struct evutil_addrinfo *hints);
