@@ -1055,7 +1055,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 			       sizeof(name))<0)
 			goto err;
 
-		replies[i]->name = mm_strdup(name);
+		replies[i]->orig = mm_strdup(name);
 
 		GET16(type);
 		GET16(class);
@@ -1074,7 +1074,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 
 			if ((datalength & 3) != 0) /* not an even number of As. */
 			    goto err;
-			memcpy(&replies[i]->ipv4_address, packet + j, 4);
+			memcpy(&replies[i]->data.a.address, packet + j, 4);
 			j += 4;
 
 			ttl_r = MIN(ttl_r, ttl);
@@ -1085,7 +1085,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 						   sizeof(name))<0)
 				goto err;
 
-			replies[i]->name = mm_strdup(name);
+			replies[i]->data.ptr.name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_CNAME && class == CLASS_INET) {
@@ -1095,36 +1095,36 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 				       sizeof(name))<0)
 				goto err;
 
-			replies[i]->name = mm_strdup(name);
+			replies[i]->data.cname.name = mm_strdup(name);
 		} else if (type == TYPE_AAAA && class == CLASS_INET) {
 			replies[i]->type = DNS_IPv6_AAAA;
 
 			if ((datalength & 15) != 0) /* not an even number of AAAAs. */
 				goto err;
-			memcpy(&replies[i]->ipv6_address, packet + j, 16);
+			memcpy(&replies[i]->data.aaaa.address, packet + j, 16);
 			j += 16;
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_SRV && class == CLASS_INET) {
 			replies[i]->type = DNS_SRV;
 
-			GET16(replies[i]->priority);
-			GET16(replies[i]->weight);
-			GET16(replies[i]->port);
+			GET16(replies[i]->data.srv.priority);
+			GET16(replies[i]->data.srv.weight);
+			GET16(replies[i]->data.srv.port);
 			if (name_parse(packet, length, &j, name,
 				       sizeof(name))<0)
 				goto err;
-			replies[i]->name = mm_strdup(name);
+			replies[i]->data.srv.name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_MX && class == CLASS_INET) {
 			replies[i]->type = DNS_MX;
 
-			GET16(replies[i]->preference);
+			GET16(replies[i]->data.mx.preference);
 			if (name_parse(packet, length, &j, name,
 				       sizeof(name))<0)
 				goto err;
-			replies[i]->name = mm_strdup(name);
+			replies[i]->data.mx.name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_NS && class == CLASS_INET) {
@@ -1133,22 +1133,28 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 			if (name_parse(packet, length, &j,
 				       name, sizeof(name))<0)
 				goto err;
-			replies[i]->name = mm_strdup(name);
+			replies[i]->data.ns.name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_SOA && class == CLASS_INET) {
 			replies[i]->type = DNS_SOA;
 
-			SKIP_NAME;
-			SKIP_NAME;
-			GET32(replies[i]->serial);
-			GET32(replies[i]->refresh);
-			GET32(replies[i]->retry);
-			GET32(replies[i]->expire);
-			GET32(replies[i]->minimum);
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
+				goto err;
+			replies[i]->data.soa.mname = mm_strdup(name);
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
+				goto err;
+			replies[i]->data.soa.rname = mm_strdup(name);
+			GET32(replies[i]->data.soa.serial);
+			GET32(replies[i]->data.soa.refresh);
+			GET32(replies[i]->data.soa.retry);
+			GET32(replies[i]->data.soa.expire);
+			GET32(replies[i]->data.soa.minimum);
 
 			ttl_r = MIN(ttl_r, ttl);
-			ttl_r = MIN(ttl_r, replies[i]->minimum);
+			ttl_r = MIN(ttl_r, replies[i]->data.soa.minimum);
 		} else {
 			/* skip over any other type of resource */
 			j += datalength;
@@ -1161,17 +1167,51 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	reply_handle(req, flags, ttl_r, replies);
 	return 0;
  err:
-	if (replies) {
-		for (i = 0; replies[i]; i++) {
-			if (replies[i]->name)
-				free(replies[i]->name);
-			free(replies[i]);
-		}
-		free(replies);
-	}
+	evdns_reply_free(replies);
 	if (req)
 		reply_handle(req, flags, 0, NULL);
 	return -1;
+}
+
+void
+evdns_reply_free(struct evdns_reply **replies)
+{
+	int i;
+
+	if (replies == NULL)
+		return;
+	for (i = 0; replies[i]; i++) {
+		switch (replies[i]->type) {
+		case DNS_PTR:
+			if (replies[i]->data.ptr.name)
+				free(replies[i]->data.ptr.name);
+			break;
+		case DNS_CNAME:
+			if (replies[i]->data.cname.name)
+				free(replies[i]->data.cname.name);
+			break;
+		case DNS_SRV:
+			if (replies[i]->data.srv.name)
+				free(replies[i]->data.srv.name);
+			break;
+		case DNS_MX:
+			if (replies[i]->data.mx.name)
+				free(replies[i]->data.mx.name);
+			break;
+		case DNS_NS:
+			if (replies[i]->data.ns.name)
+				free(replies[i]->data.ns.name);
+			break;
+		case DNS_SOA:
+			if (replies[i]->data.soa.mname)
+				free(replies[i]->data.soa.mname);
+			if (replies[i]->data.soa.rname)
+				free(replies[i]->data.soa.rname);
+			break;
+		}
+		free(replies[i]);
+	}
+	free(replies);
 }
 
 /* Parse a raw request (packet,length) sent to a nameserver port (port) from */
@@ -4471,7 +4511,7 @@ evdns_getaddrinfo_gotresolve(int result, struct evdns_reply **replies, void *arg
 
 			sa = (struct sockaddr *)&sin;
 			socklen = sizeof(sin);
-			memcpy(&sin.sin_addr.s_addr, &replies[i]->ipv4_address, 4);
+			memcpy(&sin.sin_addr.s_addr, &replies[i]->data.a.address, 4);
 		} else {
 			memset(&sin6, 0, sizeof(sin6));
 			sin6.sin6_family = AF_INET6;
@@ -4481,7 +4521,7 @@ evdns_getaddrinfo_gotresolve(int result, struct evdns_reply **replies, void *arg
 			socklen = sizeof(sin6);
 			addrlen = 16;
 			addrp = &sin6.sin6_addr.s6_addr;
-			memcpy(&sin6.sin6_addr.s6_addr, replies[i]->ipv6_address, 16);
+			memcpy(&sin6.sin6_addr.s6_addr, replies[i]->data.aaaa.address, 16);
 		}
 
 		ai = evutil_new_addrinfo_(sa, socklen, &data->hints);
@@ -4499,6 +4539,8 @@ evdns_getaddrinfo_gotresolve(int result, struct evdns_reply **replies, void *arg
 		}
 		res = evutil_addrinfo_append_(res, ai);
 	}
+
+	evdns_reply_free(replies);
 
 	if (other_req->r) {
 		/* The other request is still in progress; wait for it */

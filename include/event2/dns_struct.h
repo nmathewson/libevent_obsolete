@@ -72,29 +72,48 @@ struct evdns_server_question {
 	char name[1];
 };
 
-#define HOST_NAME_MAX 512
-
-struct in6_addr;
-
 struct evdns_reply {
 	unsigned int type;
 	unsigned short rr_type;
 
-	char *name;
+	char *orig;
 
-	int ipv4_address;
-	int ipv6_address[4];
-
-	unsigned short priority;
-	unsigned short weight;
-	unsigned short port;
-	unsigned short preference;
-
-	unsigned int serial;
-	unsigned int refresh;
-	unsigned int retry;
-	unsigned int expire;
-	unsigned int minimum;
+	union {
+		struct {
+			int address;
+		} a;
+		struct {
+			int address[4];
+		} aaaa;
+		struct {
+			char *name;
+			unsigned short priority;
+			unsigned short weight;
+			unsigned short port;
+		} srv;
+		struct {
+			char *name;
+		} ptr;
+		struct {
+			char *name;
+		} cname;
+		struct {
+			char *name;
+			unsigned short preference;
+		} mx;
+		struct {
+			char *name;
+		} ns;
+		struct {
+			char *mname;
+			char *rname;
+			unsigned int serial;
+			unsigned int refresh;
+			unsigned int retry;
+			unsigned int expire;
+			unsigned int minimum;
+		} soa;
+	} data;
 };
 
 #ifdef __cplusplus

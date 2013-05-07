@@ -55,26 +55,26 @@ main_callback(int result, struct evdns_reply **replies, void *orig) {
 	char *n = (char*)orig;
 	int i;
 
-	printf("Result: %s\n", evdns_err_to_string(result));
 	if (!replies)
 		return;
 
 	for (i = 0; replies[i]; ++i) {
-		printf("RR-Type: %d\n", replies[i]->rr_type);
 		if (replies[i]->type == DNS_IPv4_A) {
-			printf("IPv4: %s -> %s\n", replies[i]->name, debug_ntoa(replies[i]->ipv4_address));
+			printf("IPv4: %s -> %s\n", replies[i]->orig, debug_ntoa(replies[i]->data.a.address));
 		} else if (replies[i]->type == DNS_PTR) {
-			printf("PTR: %s\n", replies[i]->name);
+			printf("PTR: %s -> %s\n", replies[i]->orig, replies[i]->data.ptr.name);
 		} else if (replies[i]->type == DNS_CNAME) {
-			printf("CNAME: %s\n", replies[i]->name);			
+			printf("CNAME: %s -> %s\n", replies[i]->orig, replies[i]->data.cname.name);
 		} else if (replies[i]->type == DNS_SRV) {
-			printf("SRV: %s weight: %d, priority: %d, port: %d\n", replies[i]->name, replies[i]->weight, replies[i]->priority, replies[i]->port);
+			printf("SRV: %s -> %s weight: %d, priority: %d, port: %d\n", replies[i]->orig, replies[i]->data.srv.name, replies[i]->data.srv.weight, replies[i]->data.srv.priority, replies[i]->data.srv.port);
 		} else if (replies[i]->type == DNS_MX) {
-			printf("MX: %s preference: %d\n", replies[i]->name, replies[i]->preference);
+			printf("MX: %s -> %s preference: %d\n", replies[i]->orig, replies[i]->data.mx.name, replies[i]->data.mx.preference);
 		} else if (replies[i]->type == DNS_NS) {
-			printf("NS: %s\n", replies[i]->name);
+			printf("NS: %s -> %s\n", replies[i]->orig, replies[i]->data.ns.name);
 		}
 	}
+
+	evdns_reply_free(replies);
 	fflush(stdout);
 }
 

@@ -429,6 +429,13 @@ struct evdns_request *evdns_base_resolve_mx(struct evdns_base *base, const char 
 struct evdns_request *evdns_base_resolve_ns(struct evdns_base *base, const char *name, int flags, evdns_callback_type callback, void *ptr);
 
 /**
+  Free a sets of dns replies
+
+  @param replies the evdns_reply array to free
+*/
+void evdns_reply_free(struct evdns_reply **replies);
+
+/**
   Cancels a pending DNS resolution request.
 
   @param base the evdns_base that was used to make the request
