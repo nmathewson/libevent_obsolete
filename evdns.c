@@ -140,17 +140,14 @@
 #define u16 ev_uint16_t
 #define u8  ev_uint8_t
 
-/* maximum number of addresses from a single packet */
-/* that we bother recording */
-#define MAX_V4_ADDRS 32
-#define MAX_V6_ADDRS 32
-
-
 #define TYPE_A	       EVDNS_TYPE_A
-#define TYPE_CNAME     5
+#define TYPE_CNAME     EVDNS_TYPE_CNAME
 #define TYPE_PTR       EVDNS_TYPE_PTR
 #define TYPE_SOA       EVDNS_TYPE_SOA
 #define TYPE_AAAA      EVDNS_TYPE_AAAA
+#define TYPE_SRV       EVDNS_TYPE_SRV
+#define TYPE_MX        EVDNS_TYPE_MX
+#define TYPE_NS        EVDNS_TYPE_NS
 
 #define CLASS_INET     EVDNS_CLASS_INET
 
@@ -192,30 +189,9 @@ struct request {
 	unsigned request_appended :1;	/* true if the request pointer is data which follows this struct */
 	unsigned transmit_me :1;  /* needs to be transmitted */
 
-	/* XXXX This is a horrible hack. */
-	char **put_cname_in_ptr; /* store the cname here if we get one. */
-
 	struct evdns_base *base;
 
 	struct evdns_request *handle;
-};
-
-struct reply {
-	unsigned int type;
-	unsigned int have_answer : 1;
-	union {
-		struct {
-			u32 addrcount;
-			u32 addresses[MAX_V4_ADDRS];
-		} a;
-		struct {
-			u32 addrcount;
-			struct in6_addr addresses[MAX_V6_ADDRS];
-		} aaaa;
-		struct {
-			char name[HOST_NAME_MAX];
-		} ptr;
-	} data;
 };
 
 struct nameserver {
@@ -776,7 +752,7 @@ struct deferred_reply_callback {
 	u32 ttl;
 	u32 err;
 	evdns_callback_type user_callback;
-	struct reply reply;
+	struct evdns_reply **reply;
 };
 
 static void
@@ -785,47 +761,22 @@ reply_run_callback(struct event_callback *d, void *user_pointer)
 	struct deferred_reply_callback *cb =
 	    EVUTIL_UPCAST(d, struct deferred_reply_callback, deferred);
 
-	switch (cb->request_type) {
-	case TYPE_A:
-		if (cb->have_reply)
-			cb->user_callback(DNS_ERR_NONE, DNS_IPv4_A,
-			    cb->reply.data.a.addrcount, cb->ttl,
-			    cb->reply.data.a.addresses,
-			    user_pointer);
-		else
-			cb->user_callback(cb->err, 0, 0, cb->ttl, NULL, user_pointer);
-		break;
-	case TYPE_PTR:
-		if (cb->have_reply) {
-			char *name = cb->reply.data.ptr.name;
-			cb->user_callback(DNS_ERR_NONE, DNS_PTR, 1, cb->ttl,
-			    &name, user_pointer);
-		} else {
-			cb->user_callback(cb->err, 0, 0, cb->ttl, NULL, user_pointer);
-		}
-		break;
-	case TYPE_AAAA:
-		if (cb->have_reply)
-			cb->user_callback(DNS_ERR_NONE, DNS_IPv6_AAAA,
-			    cb->reply.data.aaaa.addrcount, cb->ttl,
-			    cb->reply.data.aaaa.addresses,
-			    user_pointer);
-		else
-			cb->user_callback(cb->err, 0, 0, cb->ttl, NULL, user_pointer);
-		break;
-	default:
-		EVUTIL_ASSERT(0);
-	}
+	if (cb->have_reply)
+		cb->user_callback(DNS_ERR_NONE, cb->ttl, cb->reply, user_pointer);
+	else
+		cb->user_callback(cb->err, cb->ttl, NULL, user_pointer);
 
 	if (cb->handle && cb->handle->pending_cb) {
 		mm_free(cb->handle);
 	}
 
 	mm_free(cb);
+
+	return;
 }
 
 static void
-reply_schedule_callback(struct request *const req, u32 ttl, u32 err, struct reply *reply)
+reply_schedule_callback(struct request *const req, u32 ttl, u32 err, struct evdns_reply **reply)
 {
 	struct deferred_reply_callback *d = mm_calloc(1, sizeof(*d));
 
@@ -843,7 +794,7 @@ reply_schedule_callback(struct request *const req, u32 ttl, u32 err, struct repl
 	d->err = err;
 	if (reply) {
 		d->have_reply = 1;
-		memcpy(&d->reply, reply, sizeof(struct reply));
+		d->reply = reply;
 	}
 
 	if (req->handle) {
@@ -863,7 +814,7 @@ reply_schedule_callback(struct request *const req, u32 ttl, u32 err, struct repl
 
 /* this processes a parsed reply packet */
 static void
-reply_handle(struct request *const req, u16 flags, u32 ttl, struct reply *reply) {
+reply_handle(struct request *const req, u16 flags, u32 ttl, struct evdns_reply **reply) {
 	int error;
 	char addrbuf[128];
 	static const int error_codes[] = {
@@ -874,7 +825,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct reply *reply)
 	ASSERT_LOCKED(req->base);
 	ASSERT_VALID_REQUEST(req);
 
-	if (flags & 0x020f || !reply || !reply->have_answer) {
+	if (flags & 0x020f || !reply || !reply[0] || (reply && reply[0] && reply[0]->rr_type != DNS_RR_ANSWER)) {
 		/* there was an error */
 		if (flags & 0x0200) {
 			error = DNS_ERR_TRUNCATED;
@@ -885,7 +836,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct reply *reply)
 			} else {
 				error = error_codes[error_code];
 			}
-		} else if (reply && !reply->have_answer) {
+		} else if ((reply && !reply[0]) || (reply[0] && reply[0]->type != DNS_RR_ANSWER)) {
 			error = DNS_ERR_NODATA;
 		} else {
 			error = DNS_ERR_UNKNOWN;
@@ -938,7 +889,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct reply *reply)
 				return;
 			}
 		}
-
+		evdns_reply_free(reply);
 		/* all else failed. Pass the failure up */
 		reply_schedule_callback(req, ttl, error, NULL);
 		request_finished(req, &REQ_HEAD(req->base, req->trans_id), 1);
@@ -1020,7 +971,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	u16 trans_id, questions, answers, authority, additional, datalength;
 	u16 flags = 0;
 	u32 ttl, ttl_r = 0xffffffff;
-	struct reply reply;
+	struct evdns_reply **replies = NULL;
 	struct request *req = NULL;
 	unsigned int i;
 
@@ -1032,14 +983,10 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	GET16(answers);
 	GET16(authority);
 	GET16(additional);
-	(void) authority; /* suppress "unused variable" warnings. */
-	(void) additional; /* suppress "unused variable" warnings. */
 
 	req = request_find_from_trans_id(base, trans_id);
 	if (!req) return -1;
 	EVUTIL_ASSERT(req->base == base);
-
-	memset(&reply, 0, sizeof(reply));
 
 	/* If it's not an answer, it doesn't correspond to any request. */
 	if (!(flags & 0x8000)) return -1;  /* must be an answer */
@@ -1075,8 +1022,6 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 		}							\
 	} while (0)
 
-	reply.type = req->request_type;
-
 	/* skip over each question in the reply */
 	for (i = 0; i < questions; ++i) {
 		/* the question looks like
@@ -1090,121 +1035,177 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	if (!name_matches)
 		goto err;
 
-	/* now we have the answer section which looks like
+	replies = mm_calloc(answers + authority + additional + 1, sizeof(*replies));
+	/* now we have the answer/authority/additional sections which looks like
 	 * <label:name><u16:type><u16:class><u32:ttl><u16:len><data...>
 	 */
-
-	for (i = 0; i < answers; ++i) {
+	for (i = 0; (int)i < (answers + authority + additional); ++i) {
 		u16 type, class;
+		char name[HOST_NAME_MAX];
 
-		SKIP_NAME;
+		replies[i] = mm_calloc(1, sizeof(**replies));
+
+		if (name_parse(packet, length, &j, name,
+			       sizeof(name))<0)
+			goto err;
+
+		replies[i]->orig = mm_strdup(name);
+
 		GET16(type);
 		GET16(class);
 		GET32(ttl);
 		GET16(datalength);
 
+		if ((int)i < answers)
+			replies[i]->rr_type = DNS_RR_ANSWER;
+		else if ((int)i < (answers + authority))
+			replies[i]->rr_type = DNS_RR_AUTHORITY;
+		else if ((int)i < (answers + authority + additional))
+			replies[i]->rr_type = DNS_RR_ADDITIONAL;
+
 		if (type == TYPE_A && class == CLASS_INET) {
-			int addrcount, addrtocopy;
-			if (req->request_type != TYPE_A) {
-				j += datalength; continue;
-			}
+			replies[i]->type = DNS_IPv4_A;
+
 			if ((datalength & 3) != 0) /* not an even number of As. */
 			    goto err;
-			addrcount = datalength >> 2;
-			addrtocopy = MIN(MAX_V4_ADDRS - reply.data.a.addrcount, (unsigned)addrcount);
+			memcpy(&replies[i]->data.a.address, packet + j, 4);
+			j += 4;
 
 			ttl_r = MIN(ttl_r, ttl);
-			/* we only bother with the first four addresses. */
-			if (j + 4*addrtocopy > length) goto err;
-			memcpy(&reply.data.a.addresses[reply.data.a.addrcount],
-				   packet + j, 4*addrtocopy);
-			j += 4*addrtocopy;
-			reply.data.a.addrcount += addrtocopy;
-			reply.have_answer = 1;
-			if (reply.data.a.addrcount == MAX_V4_ADDRS) break;
 		} else if (type == TYPE_PTR && class == CLASS_INET) {
-			if (req->request_type != TYPE_PTR) {
-				j += datalength; continue;
-			}
-			if (name_parse(packet, length, &j, reply.data.ptr.name,
-						   sizeof(reply.data.ptr.name))<0)
+			replies[i]->type = DNS_PTR;
+
+			if (name_parse(packet, length, &j, name,
+						   sizeof(name))<0)
 				goto err;
+
+			replies[i]->data.ptr.name = mm_strdup(name);
+
 			ttl_r = MIN(ttl_r, ttl);
-			reply.have_answer = 1;
-			break;
-		} else if (type == TYPE_CNAME) {
-			char cname[HOST_NAME_MAX];
-			if (!req->put_cname_in_ptr || *req->put_cname_in_ptr) {
-				j += datalength; continue;
-			}
-			if (name_parse(packet, length, &j, cname,
-				sizeof(cname))<0)
+		} else if (type == TYPE_CNAME && class == CLASS_INET) {
+			replies[i]->type = DNS_CNAME;
+
+			if (name_parse(packet, length, &j, name,
+				       sizeof(name))<0)
 				goto err;
-			*req->put_cname_in_ptr = mm_strdup(cname);
+
+			replies[i]->data.cname.name = mm_strdup(name);
 		} else if (type == TYPE_AAAA && class == CLASS_INET) {
-			int addrcount, addrtocopy;
-			if (req->request_type != TYPE_AAAA) {
-				j += datalength; continue;
-			}
+			replies[i]->type = DNS_IPv6_AAAA;
+
 			if ((datalength & 15) != 0) /* not an even number of AAAAs. */
 				goto err;
-			addrcount = datalength >> 4;  /* each address is 16 bytes long */
-			addrtocopy = MIN(MAX_V6_ADDRS - reply.data.aaaa.addrcount, (unsigned)addrcount);
-			ttl_r = MIN(ttl_r, ttl);
+			memcpy(&replies[i]->data.aaaa.address, packet + j, 16);
+			j += 16;
 
-			/* we only bother with the first four addresses. */
-			if (j + 16*addrtocopy > length) goto err;
-			memcpy(&reply.data.aaaa.addresses[reply.data.aaaa.addrcount],
-				   packet + j, 16*addrtocopy);
-			reply.data.aaaa.addrcount += addrtocopy;
-			j += 16*addrtocopy;
-			reply.have_answer = 1;
-			if (reply.data.aaaa.addrcount == MAX_V6_ADDRS) break;
+			ttl_r = MIN(ttl_r, ttl);
+		} else if (type == TYPE_SRV && class == CLASS_INET) {
+			replies[i]->type = DNS_SRV;
+
+			GET16(replies[i]->data.srv.priority);
+			GET16(replies[i]->data.srv.weight);
+			GET16(replies[i]->data.srv.port);
+			if (name_parse(packet, length, &j, name,
+				       sizeof(name))<0)
+				goto err;
+			replies[i]->data.srv.name = mm_strdup(name);
+
+			ttl_r = MIN(ttl_r, ttl);
+		} else if (type == TYPE_MX && class == CLASS_INET) {
+			replies[i]->type = DNS_MX;
+
+			GET16(replies[i]->data.mx.preference);
+			if (name_parse(packet, length, &j, name,
+				       sizeof(name))<0)
+				goto err;
+			replies[i]->data.mx.name = mm_strdup(name);
+
+			ttl_r = MIN(ttl_r, ttl);
+		} else if (type == TYPE_NS && class == CLASS_INET) {
+			replies[i]->type = DNS_NS;
+
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
+				goto err;
+			replies[i]->data.ns.name = mm_strdup(name);
+
+			ttl_r = MIN(ttl_r, ttl);
+		} else if (type == TYPE_SOA && class == CLASS_INET) {
+			replies[i]->type = DNS_SOA;
+
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
+				goto err;
+			replies[i]->data.soa.mname = mm_strdup(name);
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
+				goto err;
+			replies[i]->data.soa.rname = mm_strdup(name);
+			GET32(replies[i]->data.soa.serial);
+			GET32(replies[i]->data.soa.refresh);
+			GET32(replies[i]->data.soa.retry);
+			GET32(replies[i]->data.soa.expire);
+			GET32(replies[i]->data.soa.minimum);
+
+			ttl_r = MIN(ttl_r, ttl);
+			ttl_r = MIN(ttl_r, replies[i]->data.soa.minimum);
 		} else {
 			/* skip over any other type of resource */
 			j += datalength;
 		}
 	}
 
-	if (!reply.have_answer) {
-		for (i = 0; i < authority; ++i) {
-			u16 type, class;
-			SKIP_NAME;
-			GET16(type);
-			GET16(class);
-			GET32(ttl);
-			GET16(datalength);
-			if (type == TYPE_SOA && class == CLASS_INET) {
-				u32 serial, refresh, retry, expire, minimum;
-				SKIP_NAME;
-				SKIP_NAME;
-				GET32(serial);
-				GET32(refresh);
-				GET32(retry);
-				GET32(expire);
-				GET32(minimum);
-				(void)expire;
-				(void)retry;
-				(void)refresh;
-				(void)serial;
-				ttl_r = MIN(ttl_r, ttl);
-				ttl_r = MIN(ttl_r, minimum);
-			} else {
-				/* skip over any other type of resource */
-				j += datalength;
-			}
-		}
-	}
-
 	if (ttl_r == 0xffffffff)
 		ttl_r = 0;
 
-	reply_handle(req, flags, ttl_r, &reply);
+	reply_handle(req, flags, ttl_r, replies);
 	return 0;
  err:
+	evdns_reply_free(replies);
 	if (req)
 		reply_handle(req, flags, 0, NULL);
 	return -1;
+}
+
+void
+evdns_reply_free(struct evdns_reply **replies)
+{
+	int i;
+
+	if (replies == NULL)
+		return;
+	for (i = 0; replies[i]; i++) {
+		switch (replies[i]->type) {
+		case DNS_PTR:
+			if (replies[i]->data.ptr.name)
+				mm_free(replies[i]->data.ptr.name);
+			break;
+		case DNS_CNAME:
+			if (replies[i]->data.cname.name)
+				mm_free(replies[i]->data.cname.name);
+			break;
+		case DNS_SRV:
+			if (replies[i]->data.srv.name)
+				mm_free(replies[i]->data.srv.name);
+			break;
+		case DNS_MX:
+			if (replies[i]->data.mx.name)
+				mm_free(replies[i]->data.mx.name);
+			break;
+		case DNS_NS:
+			if (replies[i]->data.ns.name)
+				mm_free(replies[i]->data.ns.name);
+			break;
+		case DNS_SOA:
+			if (replies[i]->data.soa.mname)
+				mm_free(replies[i]->data.soa.mname);
+			if (replies[i]->data.soa.rname)
+				mm_free(replies[i]->data.soa.rname);
+			break;
+		}
+		mm_free(replies[i]);
+	}
+	mm_free(replies);
 }
 
 /* Parse a raw request (packet,length) sent to a nameserver port (port) from */
@@ -2283,12 +2284,8 @@ evdns_request_transmit(struct request *req) {
 }
 
 static void
-nameserver_probe_callback(int result, char type, int count, int ttl, void *addresses, void *arg) {
+nameserver_probe_callback(int result, int ttl, struct evdns_reply **replies, void *arg) {
 	struct nameserver *const ns = (struct nameserver *) arg;
-	(void) type;
-	(void) count;
-	(void) ttl;
-	(void) addresses;
 
 	if (result == DNS_ERR_CANCEL) {
 		/* We canceled this request because the nameserver came up
@@ -2989,6 +2986,75 @@ evdns_base_resolve_reverse_ipv6(struct evdns_base *base, const struct in6_addr *
 int evdns_resolve_reverse_ipv6(const struct in6_addr *in, int flags, evdns_callback_type callback, void *ptr) {
 	return evdns_base_resolve_reverse_ipv6(current_base, in, flags, callback, ptr)
 		? 0 : -1;
+}
+
+struct evdns_request *
+evdns_base_resolve_service(struct evdns_base *base, const char *name, int flags,
+    evdns_callback_type callback, void *ptr) {
+	struct evdns_request *handle;
+	struct request *req;
+	log(EVDNS_LOG_DEBUG, "Resolve requested for %s", name);
+	handle = mm_calloc(1, sizeof(*handle));
+	if (handle == NULL)
+		return NULL;
+	EVDNS_LOCK(base);
+	req = request_new(base, handle, TYPE_SRV, name, flags,
+			  callback, ptr);
+	if (req)
+		request_submit(req);
+
+	if (handle->current_req == NULL) {
+		mm_free(handle);
+		handle = NULL;
+	}
+	EVDNS_UNLOCK(base);
+	return handle;
+}
+
+struct evdns_request *
+evdns_base_resolve_mx(struct evdns_base *base, const char *name, int flags,
+    evdns_callback_type callback, void *ptr) {
+	struct evdns_request *handle;
+	struct request *req;
+	log(EVDNS_LOG_DEBUG, "Resolve requested for %s", name);
+	handle = mm_calloc(1, sizeof(*handle));
+	if (handle == NULL)
+		return NULL;
+	EVDNS_LOCK(base);
+	req = request_new(base, handle, TYPE_MX, name, flags,
+			  callback, ptr);
+	if (req)
+		request_submit(req);
+
+	if (handle->current_req == NULL) {
+		mm_free(handle);
+		handle = NULL;
+	}
+	EVDNS_UNLOCK(base);
+	return handle;
+}
+
+struct evdns_request *
+evdns_base_resolve_ns(struct evdns_base *base, const char *name, int flags,
+    evdns_callback_type callback, void *ptr) {
+	struct evdns_request *handle;
+	struct request *req;
+	log(EVDNS_LOG_DEBUG, "Resolve requested for %s", name);
+	handle = mm_calloc(1, sizeof(*handle));
+	if (handle == NULL)
+		return NULL;
+	EVDNS_LOCK(base);
+	req = request_new(base, handle, TYPE_NS, name, flags,
+			  callback, ptr);
+	if (req)
+		request_submit(req);
+
+	if (handle->current_req == NULL) {
+		mm_free(handle);
+		handle = NULL;
+	}
+	EVDNS_UNLOCK(base);
+	return handle;
 }
 
 /* ================================================================= */
@@ -4189,8 +4255,8 @@ struct evdns_getaddrinfo_request {
 	/* The sub_request for an AAAA record (if any) */
 	struct getaddrinfo_subrequest ipv6_request;
 
-	/* The cname result that we were told (if any) */
-	char *cname_result;
+	/* If this is set, the cname will be added to ai */
+	char want_cname;
 
 	/* If we have one request answered and one request still inflight,
 	 * then this field holds the answer from the first request... */
@@ -4239,21 +4305,9 @@ free_getaddrinfo_request(struct evdns_getaddrinfo_request *data)
 	 * both callbacks have been invoked is it safe to free the request */
 	if (data->pending_result)
 		evutil_freeaddrinfo(data->pending_result);
-	if (data->cname_result)
-		mm_free(data->cname_result);
 	event_del(&data->timeout);
 	mm_free(data);
 	return;
-}
-
-static void
-add_cname_to_reply(struct evdns_getaddrinfo_request *data,
-    struct evutil_addrinfo *ai)
-{
-	if (data->cname_result && ai) {
-		ai->ai_canonname = data->cname_result;
-		data->cname_result = NULL;
-	}
 }
 
 /* Callback: invoked when one request in a mixed-format A/AAAA getaddrinfo
@@ -4292,7 +4346,6 @@ evdns_getaddrinfo_timeout_cb(evutil_socket_t fd, short what, void *ptr)
 
 	/* Report the outcome of the other request that didn't time out. */
 	if (data->pending_result) {
-		add_cname_to_reply(data, data->pending_result);
 		data->user_cb(0, data->pending_result, data->user_data);
 		data->pending_result = NULL;
 	} else {
@@ -4327,8 +4380,7 @@ evdns_result_is_answer(int result)
 }
 
 static void
-evdns_getaddrinfo_gotresolve(int result, char type, int count,
-    int ttl, void *addresses, void *arg)
+evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, void *arg)
 {
 	int i;
 	struct getaddrinfo_subrequest *req = arg;
@@ -4344,6 +4396,7 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 	void *addrp;
 	int err;
 	int user_canceled;
+	char *cname_data = NULL;
 
 	EVUTIL_ASSERT(req->type == DNS_IPv4_A || req->type == DNS_IPv6_AAAA);
 	if (req->type == DNS_IPv4_A) {
@@ -4384,7 +4437,7 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 	}
 
 	if (result == DNS_ERR_NONE) {
-		if (count == 0)
+		if (replies == NULL)
 			err = EVUTIL_EAI_NODATA;
 		else
 			err = 0;
@@ -4408,7 +4461,6 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 		} else if (data->pending_result) {
 			/* If we have an answer waiting, and we weren't
 			 * canceled, ignore this error. */
-			add_cname_to_reply(data, data->pending_result);
 			data->user_cb(0, data->pending_result, data->user_data);
 			data->pending_result = NULL;
 		} else {
@@ -4431,34 +4483,41 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 		return;
 	}
 
-	/* Looks like we got some answers. We should turn them into addrinfos
-	 * and then either queue those or return them all. */
-	EVUTIL_ASSERT(type == DNS_IPv4_A || type == DNS_IPv6_AAAA);
-
-	if (type == DNS_IPv4_A) {
-		memset(&sin, 0, sizeof(sin));
-		sin.sin_family = AF_INET;
-		sin.sin_port = htons(data->port);
-
-		sa = (struct sockaddr *)&sin;
-		socklen = sizeof(sin);
-		addrlen = 4;
-		addrp = &sin.sin_addr.s_addr;
-	} else {
-		memset(&sin6, 0, sizeof(sin6));
-		sin6.sin6_family = AF_INET6;
-		sin6.sin6_port = htons(data->port);
-
-		sa = (struct sockaddr *)&sin6;
-		socklen = sizeof(sin6);
-		addrlen = 16;
-		addrp = &sin6.sin6_addr.s6_addr;
-	}
-
 	res = NULL;
-	for (i=0; i < count; ++i) {
+	for (i=0; replies[i] && replies[i]->rr_type == DNS_RR_ANSWER; ++i) {
 		struct evutil_addrinfo *ai;
-		memcpy(addrp, ((char*)addresses)+i*addrlen, addrlen);
+
+		sa = NULL;
+		socklen = 0;
+
+		/* Looks like we got some answers. We should turn them into addrinfos
+		 * and then either queue those or return them all. */
+
+		EVUTIL_ASSERT(replies[i]->type == DNS_IPv4_A || replies[i]->type == DNS_IPv6_AAAA || replies[i]->type == DNS_CNAME);
+
+		if (replies[i]->type == DNS_IPv4_A) {
+			memset(&sin, 0, sizeof(sin));
+			sin.sin_family = AF_INET;
+			sin.sin_port = htons(data->port);
+
+			sa = (struct sockaddr *)&sin;
+			socklen = sizeof(sin);
+			memcpy(&sin.sin_addr.s_addr, &replies[i]->data.a.address, 4);
+		} else if (replies[i]->type == DNS_IPv6_AAAA ){
+			memset(&sin6, 0, sizeof(sin6));
+			sin6.sin6_family = AF_INET6;
+			sin6.sin6_port = htons(data->port);
+
+			sa = (struct sockaddr *)&sin6;
+			socklen = sizeof(sin6);
+			addrlen = 16;
+			addrp = &sin6.sin6_addr.s6_addr;
+			memcpy(&sin6.sin6_addr.s6_addr, replies[i]->data.aaaa.address, 16);
+		} else if (replies[i]->type == DNS_CNAME) {
+			cname_data = replies[i]->data.cname.name;
+			continue;
+		}
+
 		ai = evutil_new_addrinfo_(sa, socklen, &data->hints);
 		if (!ai) {
 			if (other_req->r) {
@@ -4474,6 +4533,12 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 		}
 		res = evutil_addrinfo_append_(res, ai);
 	}
+
+	if (data->want_cname && cname_data && req)
+		res->ai_canonname = cname_data;
+
+	evdns_reply_free(replies);
+
 
 	if (other_req->r) {
 		/* The other request is still in progress; wait for it */
@@ -4495,7 +4560,6 @@ evdns_getaddrinfo_gotresolve(int result, char type, int count,
 		}
 
 		/* Call the user callback. */
-		add_cname_to_reply(data, res);
 		data->user_cb(0, res, data->user_data);
 
 		/* Free data. */
@@ -4572,7 +4636,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 	struct evutil_addrinfo *res = NULL;
 	int err;
 	int port = 0;
-	int want_cname = 0;
 
 	if (!dns_base) {
 		dns_base = current_base;
@@ -4635,8 +4698,7 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 	data->user_cb = cb;
 	data->user_data = arg;
 	data->evdns_base = dns_base;
-
-	want_cname = (hints.ai_flags & EVUTIL_AI_CANONNAME);
+	data->want_cname = (hints.ai_flags & EVUTIL_AI_CANONNAME);
 
 	/* If we are asked for a PF_UNSPEC address, we launch two requests in
 	 * parallel: one for an A address and one for an AAAA address.  We
@@ -4658,9 +4720,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 		data->ipv4_request.r = evdns_base_resolve_ipv4(dns_base,
 		    nodename, 0, evdns_getaddrinfo_gotresolve,
 		    &data->ipv4_request);
-		if (want_cname)
-			data->ipv4_request.r->current_req->put_cname_in_ptr =
-			    &data->cname_result;
 	}
 	if (hints.ai_family != PF_INET) {
 		log(EVDNS_LOG_DEBUG, "Sending request for %s on ipv6 as %p",
@@ -4669,9 +4728,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 		data->ipv6_request.r = evdns_base_resolve_ipv6(dns_base,
 		    nodename, 0, evdns_getaddrinfo_gotresolve,
 		    &data->ipv6_request);
-		if (want_cname)
-			data->ipv6_request.r->current_req->put_cname_in_ptr =
-			    &data->cname_result;
 	}
 
 	evtimer_assign(&data->timeout, dns_base->event_base,

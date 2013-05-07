@@ -78,9 +78,11 @@ static int dns_err = 0;
 
 
 static void
-dns_gethostbyname_cb(int result, char type, int count, int ttl,
-    void *addresses, void *arg)
+dns_gethostbyname_cb(int result, int ttl, struct evdns_reply **replies, void *arg)
 {
+	int i;
+	int type;
+
 	dns_ok = dns_err = 0;
 
 	if (result == DNS_ERR_TIMEOUT) {
@@ -94,46 +96,39 @@ dns_gethostbyname_cb(int result, char type, int count, int ttl,
 		goto out;
 	}
 
-	TT_BLATHER(("type: %d, count: %d, ttl: %d: ", type, count, ttl));
-
-	switch (type) {
-	case DNS_IPv6_AAAA: {
+	for (i = 0; replies[i] && replies[i]->rr_type == DNS_RR_ANSWER; i++) {
+		TT_BLATHER(("type: %d, ttl: %d: ", type, ttl));
+		switch (replies[i]->type) {
+		case DNS_IPv6_AAAA: {
 #if defined(EVENT__HAVE_STRUCT_IN6_ADDR) && defined(EVENT__HAVE_INET_NTOP) && defined(INET6_ADDRSTRLEN)
-		struct in6_addr *in6_addrs = addresses;
-		char buf[INET6_ADDRSTRLEN+1];
-		int i;
-		/* a resolution that's not valid does not help */
-		if (ttl < 0)
-			goto out;
-		for (i = 0; i < count; ++i) {
-			const char *b = evutil_inet_ntop(AF_INET6, &in6_addrs[i], buf,sizeof(buf));
+			struct in6_addr *in6_addrs = (struct in6_addr *)&replies[i]->data.aaaa.address;
+			const char *b;
+			char buf[INET6_ADDRSTRLEN+1];
+			/* a resolution that's not valid does not help */
+			if (ttl < 0)
+				goto out;
+			b = evutil_inet_ntop(AF_INET6, &in6_addrs[i], buf,sizeof(buf));
 			if (b)
 				TT_BLATHER(("%s ", b));
 			else
 				TT_BLATHER(("%s ", strerror(errno)));
-		}
 #endif
-		break;
-	}
-	case DNS_IPv4_A: {
-		struct in_addr *in_addrs = addresses;
-		int i;
-		/* a resolution that's not valid does not help */
-		if (ttl < 0)
-			goto out;
-		for (i = 0; i < count; ++i)
+			break;
+		}
+		case DNS_IPv4_A: {
+			struct in_addr *in_addrs = (struct in_addr *)&replies[i]->data.a.address;
+			/* a resolution that's not valid does not help */
+			if (ttl < 0)
+				goto out;
 			TT_BLATHER(("%s ", inet_ntoa(in_addrs[i])));
-		break;
-	}
-	case DNS_PTR:
-		/* may get at most one PTR */
-		if (count != 1)
+			break;
+		}
+		case DNS_PTR:
+			TT_BLATHER(("%s ", replies[i]->data.ptr.name));
+			break;
+		default:
 			goto out;
-
-		TT_BLATHER(("%s ", *(char **)addresses));
-		break;
-	default:
-		goto out;
+		}
 	}
 
 	dns_ok = type;
@@ -286,9 +281,11 @@ dns_server_request_cb(struct evdns_server_request *req, void *data)
 }
 
 static void
-dns_server_gethostbyname_cb(int result, char type, int count, int ttl,
-    void *addresses, void *arg)
+dns_server_gethostbyname_cb(int result, int ttl, struct evdns_reply **replies, void *arg)
 {
+	int i;
+	int count;
+
 	if (result == DNS_ERR_CANCEL) {
 		if (arg != (void*)(char*)90909) {
 			printf("Unexpected cancelation");
@@ -302,61 +299,68 @@ dns_server_gethostbyname_cb(int result, char type, int count, int ttl,
 		dns_ok = 0;
 		goto out;
 	}
+
+	for (count = 0; replies[count] && replies[count]->rr_type == DNS_RR_ANSWER; ++count)
+		;
 	if (count != 1) {
 		printf("Unexpected answer count %d. ", count);
 		dns_ok = 0;
 		goto out;
 	}
-	switch (type) {
-	case DNS_IPv4_A: {
-		struct in_addr *in_addrs = addresses;
-		if (in_addrs[0].s_addr != htonl(0xc0a80b0bUL) || ttl != 12345) {
-			printf("Bad IPv4 response \"%s\" %d. ",
-					inet_ntoa(in_addrs[0]), ttl);
-			dns_ok = 0;
-			goto out;
+
+	for (i = 0; replies[i] && replies[i]->type == DNS_RR_ANSWER; i++) {
+		switch (replies[i]->type) {
+		case DNS_IPv4_A: {
+			struct in_addr *in_addrs = &replies[i]->data.a.address;
+			if (in_addrs[0].s_addr != htonl(0xc0a80b0bUL) || ttl != 12345) {
+				printf("Bad IPv4 response \"%s\" %d. ",
+				       inet_ntoa(in_addrs[0]), ttl);
+				dns_ok = 0;
+				goto out;
+			}
+			break;
 		}
-		break;
-	}
-	case DNS_IPv6_AAAA: {
+		case DNS_IPv6_AAAA: {
 #if defined (EVENT__HAVE_STRUCT_IN6_ADDR) && defined(EVENT__HAVE_INET_NTOP) && defined(INET6_ADDRSTRLEN)
-		struct in6_addr *in6_addrs = addresses;
-		char buf[INET6_ADDRSTRLEN+1];
-		if (memcmp(&in6_addrs[0].s6_addr, "abcdefghijklmnop", 16)
-		    || ttl != 123) {
-			const char *b = evutil_inet_ntop(AF_INET6, &in6_addrs[0],buf,sizeof(buf));
-			printf("Bad IPv6 response \"%s\" %d. ", b, ttl);
-			dns_ok = 0;
-			goto out;
-		}
+			struct in6_addr *in6_addrs = &replies[i]->data.aaaa.address;
+			char buf[INET6_ADDRSTRLEN+1];
+			if (memcmp(&in6_addrs[0].s6_addr, "abcdefghijklmnop", 16)
+			    || ttl != 123) {
+				const char *b = evutil_inet_ntop(AF_INET6, &in6_addrs[0],buf,sizeof(buf));
+				printf("Bad IPv6 response \"%s\" %d. ", b, ttl);
+				dns_ok = 0;
+				goto out;
+			}
 #endif
-		break;
-	}
-	case DNS_PTR: {
-		char **addrs = addresses;
-		if (arg != (void*)6) {
-			if (strcmp(addrs[0], "ZZ.EXAMPLE.COM") ||
-			    ttl != 54321) {
-				printf("Bad PTR response \"%s\" %d. ",
-				    addrs[0], ttl);
-				dns_ok = 0;
-				goto out;
-			}
-		} else {
-			if (strcmp(addrs[0], "ZZ-INET6.EXAMPLE.COM") ||
-			    ttl != 54322) {
-				printf("Bad ipv6 PTR response \"%s\" %d. ",
-				    addrs[0], ttl);
-				dns_ok = 0;
-				goto out;
-			}
+			break;
 		}
-		break;
+		case DNS_PTR: {
+			char *addr = replies[i]->data.ptr.name;
+			if (arg != (void*)6) {
+				if (strcmp(addr, "ZZ.EXAMPLE.COM") ||
+				    ttl != 54321) {
+					printf("Bad PTR response \"%s\" %d. ",
+					       addr, ttl);
+					dns_ok = 0;
+					goto out;
+				}
+			} else {
+				if (strcmp(addr, "ZZ-INET6.EXAMPLE.COM") ||
+				    ttl != 54322) {
+					printf("Bad ipv6 PTR response \"%s\" %d. ",
+					       addr, ttl);
+					dns_ok = 0;
+					goto out;
+				}
+			}
+			break;
+		}
+		default:
+			printf("Bad response type %d. ", replies[i]->type);
+			dns_ok = 0;
+		}
 	}
-	default:
-		printf("Bad response type %d. ", type);
-		dns_ok = 0;
-	}
+
  out:
 	if (++n_server_responses == 3) {
 		event_loopexit(NULL);
@@ -455,32 +459,38 @@ struct generic_dns_callback_result {
 };
 
 static void
-generic_dns_callback(int result, char type, int count, int ttl, void *addresses,
-    void *arg)
+generic_dns_callback(int result, int ttl, struct evdns_reply **replies, void *arg)
 {
-	size_t len;
 	struct generic_dns_callback_result *res = arg;
 	res->result = result;
-	res->type = type;
-	res->count = count;
+	res->count = 1;
 	res->ttl = ttl;
 
-	if (type == DNS_IPv4_A)
-		len = count * 4;
-	else if (type == DNS_IPv6_AAAA)
-		len = count * 16;
-	else if (type == DNS_PTR)
-		len = strlen(addresses)+1;
-	else {
-		res->addrs_len = len = 0;
-		res->addrs = NULL;
+	if (replies && replies[0]) {
+		res->type = replies[0]->type;
+		if (replies[0]->type == DNS_IPv4_A) {
+			memcpy(res->addrs_buf, &replies[0]->data.a.address, 4);
+			res->addrs_len = 4;
+			res->addrs = res->addrs_buf;
+		}
+		else if (replies[0]->type == DNS_IPv6_AAAA) {
+			memcpy(res->addrs_buf, replies[0]->data.aaaa.address, 16);
+			res->addrs_len = 16;
+			res->addrs = res->addrs_buf;
+		}
+		else if (replies[0]->type == DNS_PTR) {
+			memcpy(res->addrs_buf, replies[0]->data.ptr.name, strlen(replies[0]->data.ptr.name));
+			res->addrs_len = strlen(replies[0]->data.ptr.name);
+			res->addrs = res->addrs_buf;
+		}
+		else {
+			res->addrs_len = 0;
+			res->addrs = NULL;
+		}
 	}
-	if (len) {
-		res->addrs_len = len;
-		if (len > 256)
-			len = 256;
-		memcpy(res->addrs_buf, addresses, len);
-		res->addrs = res->addrs_buf;
+	else {
+		res->addrs_len = 0;
+		res->addrs = NULL;		
 	}
 
 	if (--n_replies_left == 0)

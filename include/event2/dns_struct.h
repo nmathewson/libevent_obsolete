@@ -72,6 +72,50 @@ struct evdns_server_question {
 	char name[1];
 };
 
+struct evdns_reply {
+	unsigned int type;
+	unsigned short rr_type;
+
+	char *orig;
+
+	union {
+		struct {
+			int address;
+		} a;
+		struct {
+			int address[4];
+		} aaaa;
+		struct {
+			char *name;
+			unsigned short priority;
+			unsigned short weight;
+			unsigned short port;
+		} srv;
+		struct {
+			char *name;
+		} ptr;
+		struct {
+			char *name;
+		} cname;
+		struct {
+			char *name;
+			unsigned short preference;
+		} mx;
+		struct {
+			char *name;
+		} ns;
+		struct {
+			char *mname;
+			char *rname;
+			unsigned int serial;
+			unsigned int refresh;
+			unsigned int retry;
+			unsigned int expire;
+			unsigned int minimum;
+		} soa;
+	} data;
+};
+
 #ifdef __cplusplus
 }
 #endif
