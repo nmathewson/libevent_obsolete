@@ -974,7 +974,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	u16 trans_id, questions, answers, authority, additional, datalength;
 	u16 flags = 0;
 	u32 ttl, ttl_r = 0xffffffff;
-	struct evdns_reply **reply = NULL;
+	struct evdns_reply **replies = NULL;
 	struct request *req = NULL;
 	unsigned int i;
 
@@ -992,7 +992,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	EVUTIL_ASSERT(req->base == base);
 
 	if (answers || authority || additional) {
-		reply = mm_calloc(answers + authority + additional + 1, sizeof(*reply));
+		replies = mm_calloc(answers + authority + additional + 1, sizeof(*replies));
 	}
 
 	/* If it's not an answer, it doesn't correspond to any request. */
@@ -1029,8 +1029,6 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 		}							\
 	} while (0)
 
-	/* reply.type = req->request_type; */
-
 	/* skip over each question in the reply */
 	for (i = 0; i < questions; ++i) {
 		/* the question looks like
@@ -1044,113 +1042,113 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	if (!name_matches)
 		goto err;
 
-	/* now we have the answer section which looks like
+	/* now we have the answer/authority/additional sections which looks like
 	 * <label:name><u16:type><u16:class><u32:ttl><u16:len><data...>
 	 */
-	for (i = 0; i < (unsigned int)(answers + authority + additional); ++i) {
+	for (i = 0; (int)i < (answers + authority + additional); ++i) {
 		u16 type, class;
 		char name[HOST_NAME_MAX];
 
-		reply[i] = mm_calloc(1, sizeof(**reply));
+		replies[i] = mm_calloc(1, sizeof(**replies));
 
 		if (name_parse(packet, length, &j, name,
 			       sizeof(name))<0)
 			goto err;
 
-		reply[i]->name = mm_strdup(name);
+		replies[i]->name = mm_strdup(name);
 
 		GET16(type);
 		GET16(class);
 		GET32(ttl);
 		GET16(datalength);
 
-		if (i < answers)
-			reply[i]->rr_type = DNS_RR_ANSWER;
-		else if (i < (answers + authority))
-			reply[i]->rr_type = DNS_RR_AUTHORITY;
-		else if (i < (answers + authority + additional))
-			reply[i]->rr_type = DNS_RR_ADDITIONAL;
+		if ((int)i < answers)
+			replies[i]->rr_type = DNS_RR_ANSWER;
+		else if ((int)i < (answers + authority))
+			replies[i]->rr_type = DNS_RR_AUTHORITY;
+		else if ((int)i < (answers + authority + additional))
+			replies[i]->rr_type = DNS_RR_ADDITIONAL;
 
 		if (type == TYPE_A && class == CLASS_INET) {
-			reply[i]->type = TYPE_A;
+			replies[i]->type = DNS_IPv4_A;
 
 			if ((datalength & 3) != 0) /* not an even number of As. */
 			    goto err;
-			memcpy(&reply[i]->ipv4_address, packet + j, 4);
+			memcpy(&replies[i]->ipv4_address, packet + j, 4);
 			j += 4;
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_PTR && class == CLASS_INET) {
-			reply[i]->type = TYPE_PTR;
+			replies[i]->type = DNS_PTR;
 
 			if (name_parse(packet, length, &j, name,
 						   sizeof(name))<0)
 				goto err;
 
-			reply[i]->name = mm_strdup(name);
+			replies[i]->name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_CNAME && class == CLASS_INET) {
-			reply[i]->type = DNS_CNAME;
+			replies[i]->type = DNS_CNAME;
 
 			if (name_parse(packet, length, &j, name,
 				       sizeof(name))<0)
 				goto err;
 
-			reply[i]->name = mm_strdup(name);
+			replies[i]->name = mm_strdup(name);
 		} else if (type == TYPE_AAAA && class == CLASS_INET) {
-			reply[i]->type = DNS_IPv6_AAAA;
+			replies[i]->type = DNS_IPv6_AAAA;
 
 			if ((datalength & 15) != 0) /* not an even number of AAAAs. */
 				goto err;
-			memcpy(&reply[i]->ipv6_address, packet + j, 16);
+			memcpy(&replies[i]->ipv6_address, packet + j, 16);
 			j += 16;
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_SRV && class == CLASS_INET) {
-			reply[i]->type = DNS_SRV;
+			replies[i]->type = DNS_SRV;
 
-			GET16(reply[i]->priority);
-			GET16(reply[i]->weight);
-			GET16(reply[i]->port);
+			GET16(replies[i]->priority);
+			GET16(replies[i]->weight);
+			GET16(replies[i]->port);
 			if (name_parse(packet, length, &j, name,
 				       sizeof(name))<0)
 				goto err;
-			reply[i]->name = mm_strdup(name);
+			replies[i]->name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_MX && class == CLASS_INET) {
-			reply[i]->type = DNS_MX;
+			replies[i]->type = DNS_MX;
 
-			GET16(reply[i]->preference);
+			GET16(replies[i]->preference);
 			if (name_parse(packet, length, &j, name,
 				       sizeof(name))<0)
 				goto err;
-			reply[i]->name = mm_strdup(name);
+			replies[i]->name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_NS && class == CLASS_INET) {
-			reply[i]->type = DNS_NS;
+			replies[i]->type = DNS_NS;
 
-			if (name_parse(packet, length, &j, name,
-				       sizeof(name))<0)
+			if (name_parse(packet, length, &j,
+				       name, sizeof(name))<0)
 				goto err;
-			reply[i]->name = mm_strdup(name);
+			replies[i]->name = mm_strdup(name);
 
 			ttl_r = MIN(ttl_r, ttl);
 		} else if (type == TYPE_SOA && class == CLASS_INET) {
-			reply[i]->type = DNS_SOA;
+			replies[i]->type = DNS_SOA;
 
 			SKIP_NAME;
 			SKIP_NAME;
-			GET32(reply[i]->serial);
-			GET32(reply[i]->refresh);
-			GET32(reply[i]->retry);
-			GET32(reply[i]->expire);
-			GET32(reply[i]->minimum);
+			GET32(replies[i]->serial);
+			GET32(replies[i]->refresh);
+			GET32(replies[i]->retry);
+			GET32(replies[i]->expire);
+			GET32(replies[i]->minimum);
 
 			ttl_r = MIN(ttl_r, ttl);
-			ttl_r = MIN(ttl_r, reply[i]->minimum);
+			ttl_r = MIN(ttl_r, replies[i]->minimum);
 		} else {
 			/* skip over any other type of resource */
 			j += datalength;
@@ -1160,9 +1158,17 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	if (ttl_r == 0xffffffff)
 		ttl_r = 0;
 
-	reply_handle(req, flags, ttl_r, reply);
+	reply_handle(req, flags, ttl_r, replies);
 	return 0;
  err:
+	if (replies) {
+		for (i = 0; replies[i]; i++) {
+			if (replies[i]->name)
+				free(replies[i]->name);
+			free(replies[i]);
+		}
+		free(replies);
+	}
 	if (req)
 		reply_handle(req, flags, 0, NULL);
 	return -1;
@@ -4451,7 +4457,7 @@ evdns_getaddrinfo_gotresolve(int result, struct evdns_reply **replies, void *arg
 	}
 
 	res = NULL;
-	for (i=0; replies[i]; ++i) {
+	for (i=0; replies[i] && replies[i]->rr_type == DNS_RR_ANSWER; ++i) {
 		struct evutil_addrinfo *ai;
 
 		/* Looks like we got some answers. We should turn them into addrinfos
