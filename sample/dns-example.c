@@ -52,7 +52,6 @@ debug_ntoa(u32 address)
 
 static void
 main_callback(int result, int ttl, struct evdns_reply **replies, void *orig) {
-	char *n = (char*)orig;
 	int i;
 
 	if (!replies)
