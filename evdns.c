@@ -189,9 +189,6 @@ struct request {
 	unsigned request_appended :1;	/* true if the request pointer is data which follows this struct */
 	unsigned transmit_me :1;  /* needs to be transmitted */
 
-	/* XXXX This is a horrible hack. */
-	char **put_cname_in_ptr; /* store the cname here if we get one. */
-
 	struct evdns_base *base;
 
 	struct evdns_request *handle;
@@ -1181,34 +1178,34 @@ evdns_reply_free(struct evdns_reply **replies)
 		switch (replies[i]->type) {
 		case DNS_PTR:
 			if (replies[i]->data.ptr.name)
-				free(replies[i]->data.ptr.name);
+				mm_free(replies[i]->data.ptr.name);
 			break;
 		case DNS_CNAME:
 			if (replies[i]->data.cname.name)
-				free(replies[i]->data.cname.name);
+				mm_free(replies[i]->data.cname.name);
 			break;
 		case DNS_SRV:
 			if (replies[i]->data.srv.name)
-				free(replies[i]->data.srv.name);
+				mm_free(replies[i]->data.srv.name);
 			break;
 		case DNS_MX:
 			if (replies[i]->data.mx.name)
-				free(replies[i]->data.mx.name);
+				mm_free(replies[i]->data.mx.name);
 			break;
 		case DNS_NS:
 			if (replies[i]->data.ns.name)
-				free(replies[i]->data.ns.name);
+				mm_free(replies[i]->data.ns.name);
 			break;
 		case DNS_SOA:
 			if (replies[i]->data.soa.mname)
-				free(replies[i]->data.soa.mname);
+				mm_free(replies[i]->data.soa.mname);
 			if (replies[i]->data.soa.rname)
-				free(replies[i]->data.soa.rname);
+				mm_free(replies[i]->data.soa.rname);
 			break;
 		}
-		free(replies[i]);
+		mm_free(replies[i]);
 	}
-	free(replies);
+	mm_free(replies);
 }
 
 /* Parse a raw request (packet,length) sent to a nameserver port (port) from */
@@ -4252,8 +4249,8 @@ struct evdns_getaddrinfo_request {
 	/* The sub_request for an AAAA record (if any) */
 	struct getaddrinfo_subrequest ipv6_request;
 
-	/* The cname result that we were told (if any) */
-	char *cname_result;
+	/* If this is set, the cname will be added to ai */
+	char want_cname;
 
 	/* If we have one request answered and one request still inflight,
 	 * then this field holds the answer from the first request... */
@@ -4302,8 +4299,6 @@ free_getaddrinfo_request(struct evdns_getaddrinfo_request *data)
 	 * both callbacks have been invoked is it safe to free the request */
 	if (data->pending_result)
 		evutil_freeaddrinfo(data->pending_result);
-	if (data->cname_result)
-		mm_free(data->cname_result);
 	event_del(&data->timeout);
 	mm_free(data);
 	return;
@@ -4533,7 +4528,7 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 		res = evutil_addrinfo_append_(res, ai);
 	}
 
-	if (cname_data && req)
+	if (data->want_cname && cname_data && req)
 		res->ai_canonname = cname_data;
 
 	evdns_reply_free(replies);
@@ -4635,7 +4630,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 	struct evutil_addrinfo *res = NULL;
 	int err;
 	int port = 0;
-	int want_cname = 0;
 
 	if (!dns_base) {
 		dns_base = current_base;
@@ -4698,8 +4692,7 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 	data->user_cb = cb;
 	data->user_data = arg;
 	data->evdns_base = dns_base;
-
-	want_cname = (hints.ai_flags & EVUTIL_AI_CANONNAME);
+	data->want_cname = (hints.ai_flags & EVUTIL_AI_CANONNAME);
 
 	/* If we are asked for a PF_UNSPEC address, we launch two requests in
 	 * parallel: one for an A address and one for an AAAA address.  We
@@ -4721,9 +4714,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 		data->ipv4_request.r = evdns_base_resolve_ipv4(dns_base,
 		    nodename, 0, evdns_getaddrinfo_gotresolve,
 		    &data->ipv4_request);
-		if (want_cname)
-			data->ipv4_request.r->current_req->put_cname_in_ptr =
-			    &data->cname_result;
 	}
 	if (hints.ai_family != PF_INET) {
 		log(EVDNS_LOG_DEBUG, "Sending request for %s on ipv6 as %p",
@@ -4732,9 +4722,6 @@ evdns_getaddrinfo(struct evdns_base *dns_base,
 		data->ipv6_request.r = evdns_base_resolve_ipv6(dns_base,
 		    nodename, 0, evdns_getaddrinfo_gotresolve,
 		    &data->ipv6_request);
-		if (want_cname)
-			data->ipv6_request.r->current_req->put_cname_in_ptr =
-			    &data->cname_result;
 	}
 
 	evtimer_assign(&data->timeout, dns_base->event_base,
