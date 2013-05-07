@@ -174,6 +174,11 @@ extern "C" {
 #define DNS_IPv4_A 1
 #define DNS_PTR 2
 #define DNS_IPv6_AAAA 3
+#define DNS_CNAME 4
+#define DNS_SRV 5
+#define DNS_MX 6
+#define DNS_NS 7
+#define DNS_SOA 8
 
 #define DNS_QUERY_NO_SEARCH 1
 
@@ -186,17 +191,18 @@ extern "C" {
 /* Obsolete name for DNS_QUERY_NO_SEARCH */
 #define DNS_NO_SEARCH DNS_QUERY_NO_SEARCH
 
+#define DNS_RR_ANSWER 1
+#define DNS_RR_AUTHORITY 2
+#define DNS_RR_ADDITIONAL 3
+
+struct evdns_reply;
+
 /**
  * The callback that contains the results from a lookup.
  * - result is one of the DNS_ERR_* values (DNS_ERR_NONE for success)
- * - type is either DNS_IPv4_A or DNS_PTR or DNS_IPv6_AAAA
- * - count contains the number of addresses of form type
- * - ttl is the number of seconds the resolution may be cached for.
- * - addresses needs to be cast according to type.  It will be an array of
- *   4-byte sequences for ipv4, or an array of 16-byte sequences for ipv6,
- *   or a nul-terminated string for PTR.
+ * - replies is an array of struct evdns_reply (or NULL if no replies)
  */
-typedef void (*evdns_callback_type) (int result, char type, int count, int ttl, void *addresses, void *arg);
+typedef void (*evdns_callback_type) (int result, struct evdns_reply **replies, void *arg);
 
 struct evdns_base;
 struct event_base;
@@ -384,6 +390,45 @@ struct evdns_request *evdns_base_resolve_reverse(struct evdns_base *base, const 
 struct evdns_request *evdns_base_resolve_reverse_ipv6(struct evdns_base *base, const struct in6_addr *in, int flags, evdns_callback_type callback, void *ptr);
 
 /**
+  Lookup an SRV record for a given name.
+
+  @param base the evdns_base to which to apply this operation
+  @param name a DNS hostname
+  @param flags either 0, or DNS_QUERY_NO_SEARCH to disable searching for this query.
+  @param callback a callback function to invoke when the request is completed
+  @param ptr an argument to pass to the callback function
+  @return an evdns_request object if successful, or NULL if an error occurred.
+  @see evdns_resolve_ipv4(), evdns_resolve_ipv6(), evdns_resolve_reverse(), evdns_resolve_reverse_ipv6(), evdns_cancel_request()
+ */
+struct evdns_request *evdns_base_resolve_service(struct evdns_base *base, const char *name, int flags, evdns_callback_type callback, void *ptr);
+
+/**
+  Lookup an MX record for a given name.
+
+  @param base the evdns_base to which to apply this operation
+  @param name a DNS hostname
+  @param flags either 0, or DNS_QUERY_NO_SEARCH to disable searching for this query.
+  @param callback a callback function to invoke when the request is completed
+  @param ptr an argument to pass to the callback function
+  @return an evdns_request object if successful, or NULL if an error occurred.
+  @see evdns_resolve_ipv4(), evdns_resolve_ipv6(), evdns_resolve_reverse(), evdns_resolve_reverse_ipv6(), evdns_cancel_request()
+ */
+struct evdns_request *evdns_base_resolve_mx(struct evdns_base *base, const char *name, int flags, evdns_callback_type callback, void *ptr);
+
+/**
+  Lookup an NS record for a given name.
+
+  @param base the evdns_base to which to apply this operation
+  @param name a DNS hostname
+  @param flags either 0, or DNS_QUERY_NO_SEARCH to disable searching for this query.
+  @param callback a callback function to invoke when the request is completed
+  @param ptr an argument to pass to the callback function
+  @return an evdns_request object if successful, or NULL if an error occurred.
+  @see evdns_resolve_ipv4(), evdns_resolve_ipv6(), evdns_resolve_reverse(), evdns_resolve_reverse_ipv6(), evdns_cancel_request()
+ */
+struct evdns_request *evdns_base_resolve_ns(struct evdns_base *base, const char *name, int flags, evdns_callback_type callback, void *ptr);
+
+/**
   Cancels a pending DNS resolution request.
 
   @param base the evdns_base that was used to make the request
@@ -559,6 +604,7 @@ typedef void (*evdns_request_callback_fn_type)(struct evdns_server_request *, vo
 #define EVDNS_TYPE_MX	  15
 #define EVDNS_TYPE_TXT	  16
 #define EVDNS_TYPE_AAAA	  28
+#define EVDNS_TYPE_SRV    33
 
 #define EVDNS_QTYPE_AXFR 252
 #define EVDNS_QTYPE_ALL	 255

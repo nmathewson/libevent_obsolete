@@ -51,19 +51,29 @@ debug_ntoa(u32 address)
 }
 
 static void
-main_callback(int result, char type, int count, int ttl,
-			  void *addrs, void *orig) {
+main_callback(int result, struct evdns_reply **replies, void *orig) {
 	char *n = (char*)orig;
 	int i;
-	for (i = 0; i < count; ++i) {
-		if (type == DNS_IPv4_A) {
-			printf("%s: %s\n", n, debug_ntoa(((u32*)addrs)[i]));
-		} else if (type == DNS_PTR) {
-			printf("%s: %s\n", n, ((char**)addrs)[i]);
+
+	printf("Result: %s\n", evdns_err_to_string(result));
+	if (!replies)
+		return;
+
+	for (i = 0; replies[i]; ++i) {
+		printf("RR-Type: %d\n", replies[i]->rr_type);
+		if (replies[i]->type == DNS_IPv4_A) {
+			printf("IPv4: %s -> %s\n", replies[i]->name, debug_ntoa(replies[i]->ipv4_address));
+		} else if (replies[i]->type == DNS_PTR) {
+			printf("PTR: %s\n", replies[i]->name);
+		} else if (replies[i]->type == DNS_CNAME) {
+			printf("CNAME: %s\n", replies[i]->name);			
+		} else if (replies[i]->type == DNS_SRV) {
+			printf("SRV: %s weight: %d, priority: %d, port: %d\n", replies[i]->name, replies[i]->weight, replies[i]->priority, replies[i]->port);
+		} else if (replies[i]->type == DNS_MX) {
+			printf("MX: %s preference: %d\n", replies[i]->name, replies[i]->preference);
+		} else if (replies[i]->type == DNS_NS) {
+			printf("NS: %s\n", replies[i]->name);
 		}
-	}
-	if (!count) {
-		printf("%s: No answer (%d)\n", n, result);
 	}
 	fflush(stdout);
 }
@@ -142,12 +152,12 @@ logfn(int is_warn, const char *msg) {
 int
 main(int c, char **v) {
 	int idx;
-	int reverse = 0, servertest = 0, use_getaddrinfo = 0;
+	int reverse = 0, servertest = 0, use_getaddrinfo = 0, service = 0, mx = 0, ns = 0;
 	struct event_base *event_base = NULL;
 	struct evdns_base *evdns_base = NULL;
 	const char *resolv_conf = NULL;
 	if (c<2) {
-		fprintf(stderr, "syntax: %s [-x] [-v] [-c resolv.conf] hostname\n", v[0]);
+		fprintf(stderr, "syntax: %s [-x] [-v] [-s] [-m] [-n] [-c resolv.conf] hostname\n", v[0]);
 		fprintf(stderr, "syntax: %s [-servertest]\n", v[0]);
 		return 1;
 	}
@@ -159,6 +169,12 @@ main(int c, char **v) {
 			verbose = 1;
 		else if (!strcmp(v[idx], "-g"))
 			use_getaddrinfo = 1;
+		else if (!strcmp(v[idx], "-s"))
+			service = 1;
+		else if (!strcmp(v[idx], "-m"))
+			mx = 1;
+		else if (!strcmp(v[idx], "-n"))
+			ns = 1;
 		else if (!strcmp(v[idx], "-servertest"))
 			servertest = 1;
 		else if (!strcmp(v[idx], "-c")) {
@@ -236,6 +252,15 @@ main(int c, char **v) {
 			fprintf(stderr, "resolving (fwd) %s...\n",v[idx]);
 			evdns_getaddrinfo(evdns_base, v[idx], NULL, &hints,
 			    gai_callback, v[idx]);
+		} else if (service) {
+			fprintf(stderr, "resolving SRV (fwd) %s...\n",v[idx]);
+			evdns_base_resolve_service(evdns_base, v[idx], 0, main_callback, v[idx]);
+		} else if (mx) {
+			fprintf(stderr, "resolving MX (fwd) %s...\n",v[idx]);
+			evdns_base_resolve_mx(evdns_base, v[idx], 0, main_callback, v[idx]);
+		} else if (ns) {
+			fprintf(stderr, "resolving NS (fwd) %s...\n",v[idx]);
+			evdns_base_resolve_ns(evdns_base, v[idx], 0, main_callback, v[idx]);
 		} else {
 			fprintf(stderr, "resolving (fwd) %s...\n",v[idx]);
 			evdns_base_resolve_ipv4(evdns_base, v[idx], 0, main_callback, v[idx]);
