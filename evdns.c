@@ -828,7 +828,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct evdns_reply *
 	ASSERT_LOCKED(req->base);
 	ASSERT_VALID_REQUEST(req);
 
-	if (flags & 0x020f || !reply) {
+	if (flags & 0x020f || !reply || !reply[0] || (reply && reply[0] && reply[0]->rr_type != DNS_RR_ANSWER)) {
 		/* there was an error */
 		if (flags & 0x0200) {
 			error = DNS_ERR_TRUNCATED;
@@ -839,7 +839,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct evdns_reply *
 			} else {
 				error = error_codes[error_code];
 			}
-		} else if (reply) {
+		} else if ((reply && !reply[0]) || (reply[0] && reply[0]->type != DNS_RR_ANSWER)) {
 			error = DNS_ERR_NODATA;
 		} else {
 			error = DNS_ERR_UNKNOWN;
@@ -892,7 +892,7 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct evdns_reply *
 				return;
 			}
 		}
-
+		evdns_reply_free(reply);
 		/* all else failed. Pass the failure up */
 		reply_schedule_callback(req, ttl, error, NULL);
 		request_finished(req, &REQ_HEAD(req->base, req->trans_id), 1);
@@ -991,10 +991,6 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	if (!req) return -1;
 	EVUTIL_ASSERT(req->base == base);
 
-	if (answers || authority || additional) {
-		replies = mm_calloc(answers + authority + additional + 1, sizeof(*replies));
-	}
-
 	/* If it's not an answer, it doesn't correspond to any request. */
 	if (!(flags & 0x8000)) return -1;  /* must be an answer */
 	if ((flags & 0x020f) && (flags & 0x020f) != DNS_ERR_NOTEXIST) {
@@ -1042,6 +1038,7 @@ reply_parse(struct evdns_base *base, u8 *packet, int length) {
 	if (!name_matches)
 		goto err;
 
+	replies = mm_calloc(answers + authority + additional + 1, sizeof(*replies));
 	/* now we have the answer/authority/additional sections which looks like
 	 * <label:name><u16:type><u16:class><u32:ttl><u16:len><data...>
 	 */
@@ -4312,16 +4309,6 @@ free_getaddrinfo_request(struct evdns_getaddrinfo_request *data)
 	return;
 }
 
-static void
-add_cname_to_reply(struct evdns_getaddrinfo_request *data,
-    struct evutil_addrinfo *ai)
-{
-	if (data->cname_result && ai) {
-		ai->ai_canonname = data->cname_result;
-		data->cname_result = NULL;
-	}
-}
-
 /* Callback: invoked when one request in a mixed-format A/AAAA getaddrinfo
  * request has finished, but the other one took too long to answer. Pass
  * along the answer we got, and cancel the other request.
@@ -4358,7 +4345,6 @@ evdns_getaddrinfo_timeout_cb(evutil_socket_t fd, short what, void *ptr)
 
 	/* Report the outcome of the other request that didn't time out. */
 	if (data->pending_result) {
-		add_cname_to_reply(data, data->pending_result);
 		data->user_cb(0, data->pending_result, data->user_data);
 		data->pending_result = NULL;
 	} else {
@@ -4409,6 +4395,7 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 	void *addrp;
 	int err;
 	int user_canceled;
+	char *cname_data = NULL;
 
 	EVUTIL_ASSERT(req->type == DNS_IPv4_A || req->type == DNS_IPv6_AAAA);
 	if (req->type == DNS_IPv4_A) {
@@ -4473,7 +4460,6 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 		} else if (data->pending_result) {
 			/* If we have an answer waiting, and we weren't
 			 * canceled, ignore this error. */
-			add_cname_to_reply(data, data->pending_result);
 			data->user_cb(0, data->pending_result, data->user_data);
 			data->pending_result = NULL;
 		} else {
@@ -4500,9 +4486,13 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 	for (i=0; replies[i] && replies[i]->rr_type == DNS_RR_ANSWER; ++i) {
 		struct evutil_addrinfo *ai;
 
+		sa = NULL;
+		socklen = 0;
+
 		/* Looks like we got some answers. We should turn them into addrinfos
 		 * and then either queue those or return them all. */
-		EVUTIL_ASSERT(replies[i]->type == DNS_IPv4_A || replies[i]->type == DNS_IPv6_AAAA);
+
+		EVUTIL_ASSERT(replies[i]->type == DNS_IPv4_A || replies[i]->type == DNS_IPv6_AAAA || replies[i]->type == DNS_CNAME);
 
 		if (replies[i]->type == DNS_IPv4_A) {
 			memset(&sin, 0, sizeof(sin));
@@ -4512,7 +4502,7 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 			sa = (struct sockaddr *)&sin;
 			socklen = sizeof(sin);
 			memcpy(&sin.sin_addr.s_addr, &replies[i]->data.a.address, 4);
-		} else {
+		} else if (replies[i]->type == DNS_IPv6_AAAA ){
 			memset(&sin6, 0, sizeof(sin6));
 			sin6.sin6_family = AF_INET6;
 			sin6.sin6_port = htons(data->port);
@@ -4522,6 +4512,9 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 			addrlen = 16;
 			addrp = &sin6.sin6_addr.s6_addr;
 			memcpy(&sin6.sin6_addr.s6_addr, replies[i]->data.aaaa.address, 16);
+		} else if (replies[i]->type == DNS_CNAME) {
+			cname_data = replies[i]->data.cname.name;
+			continue;
 		}
 
 		ai = evutil_new_addrinfo_(sa, socklen, &data->hints);
@@ -4540,7 +4533,11 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 		res = evutil_addrinfo_append_(res, ai);
 	}
 
+	if (cname_data && req)
+		res->ai_canonname = cname_data;
+
 	evdns_reply_free(replies);
+
 
 	if (other_req->r) {
 		/* The other request is still in progress; wait for it */
@@ -4562,7 +4559,6 @@ evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, 
 		}
 
 		/* Call the user callback. */
-		add_cname_to_reply(data, res);
 		data->user_cb(0, res, data->user_data);
 
 		/* Free data. */
