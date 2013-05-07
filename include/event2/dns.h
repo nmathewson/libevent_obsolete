@@ -202,7 +202,7 @@ struct evdns_reply;
  * - result is one of the DNS_ERR_* values (DNS_ERR_NONE for success)
  * - replies is an array of struct evdns_reply (or NULL if no replies)
  */
-typedef void (*evdns_callback_type) (int result, struct evdns_reply **replies, void *arg);
+typedef void (*evdns_callback_type) (int result, int ttl, struct evdns_reply **replies, void *arg);
 
 struct evdns_base;
 struct event_base;

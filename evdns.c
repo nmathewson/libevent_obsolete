@@ -765,9 +765,9 @@ reply_run_callback(struct event_callback *d, void *user_pointer)
 	    EVUTIL_UPCAST(d, struct deferred_reply_callback, deferred);
 
 	if (cb->have_reply)
-		cb->user_callback(DNS_ERR_NONE, cb->reply, user_pointer);
+		cb->user_callback(DNS_ERR_NONE, cb->ttl, cb->reply, user_pointer);
 	else
-		cb->user_callback(cb->err, NULL, user_pointer);
+		cb->user_callback(cb->err, cb->ttl, NULL, user_pointer);
 
 	if (cb->handle && cb->handle->pending_cb) {
 		mm_free(cb->handle);
@@ -2284,7 +2284,7 @@ evdns_request_transmit(struct request *req) {
 }
 
 static void
-nameserver_probe_callback(int result, struct evdns_reply **replies, void *arg) {
+nameserver_probe_callback(int result, int ttl, struct evdns_reply **replies, void *arg) {
 	struct nameserver *const ns = (struct nameserver *) arg;
 
 	if (result == DNS_ERR_CANCEL) {
@@ -4393,7 +4393,7 @@ evdns_result_is_answer(int result)
 }
 
 static void
-evdns_getaddrinfo_gotresolve(int result, struct evdns_reply **replies, void *arg)
+evdns_getaddrinfo_gotresolve(int result, int ttl, struct evdns_reply **replies, void *arg)
 {
 	int i;
 	struct getaddrinfo_subrequest *req = arg;
