@@ -1215,6 +1215,7 @@ be_openssl_destruct(struct bufferevent *bev)
 	struct bufferevent_openssl *bev_ssl = upcast(bev);
 
 	if (bev_ssl->bev.options & BEV_OPT_CLOSE_ON_FREE) {
+		SSL_shutdown(bev_ssl->ssl);
 		if (! bev_ssl->underlying) {
 			evutil_socket_t fd = -1;
 			BIO *bio = SSL_get_wbio(bev_ssl->ssl);
