@@ -377,6 +377,7 @@ int evutil_getaddrinfo_async_(struct evdns_base *dns_base,
  * ::1). */
 int evutil_sockaddr_is_loopback_(const struct sockaddr *sa);
 
+void evutil_assert_socket_nonblocking_(evutil_socket_t fd);
 
 /**
     Formats a sockaddr sa into a string buffer of size outlen stored in out.

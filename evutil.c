@@ -352,6 +352,19 @@ evutil_fast_socket_nonblocking(evutil_socket_t fd)
 #endif
 }
 
+void
+evutil_assert_socket_nonblocking_(evutil_socket_t fd)
+{
+#ifdef _WIN32
+	// is there any way?
+#else
+	int flags;
+	if ((flags = fcntl(fd, F_GETFL, NULL)) >= 0) {
+    	EVUTIL_ASSERT(flags & O_NONBLOCK);
+	}
+#endif
+}
+
 int
 evutil_make_listen_socket_reuseable(evutil_socket_t sock)
 {

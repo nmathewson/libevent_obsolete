@@ -326,6 +326,8 @@ HT_GENERATE(event_debug_map, event_debug_entry, node, hash_debug_entry,
 		EVLOCK_UNLOCK(event_debug_map_lock_, 0);		\
 	}								\
 	} while (0)
+#define event_debug_assert_socket_nonblocking_(fd) \
+	evutil_assert_socket_nonblocking_(fd)
 #else
 #define event_debug_note_setup_(ev) \
 	((void)0)
@@ -338,6 +340,8 @@ HT_GENERATE(event_debug_map, event_debug_entry, node, hash_debug_entry,
 #define event_debug_assert_is_setup_(ev) \
 	((void)0)
 #define event_debug_assert_not_added_(ev) \
+	((void)0)
+#define event_debug_assert_socket_nonblocking_(fd) \
 	((void)0)
 #endif
 
@@ -1977,6 +1981,8 @@ event_assign(struct event *ev, struct event_base *base, evutil_socket_t fd, shor
 		base = current_base;
 	if (arg == &event_self_cbarg_ptr_)
 		arg = ev;
+
+	event_debug_assert_socket_nonblocking_(fd);
 
 	event_debug_assert_not_added_(ev);
 
