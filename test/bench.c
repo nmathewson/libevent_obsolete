@@ -57,10 +57,14 @@
 #endif
 #include <errno.h>
 
+#ifdef _WIN32
+#include <getopt.h>
+#endif
+
 #include <event.h>
 #include <evutil.h>
 
-static int count, writes, fired;
+static int count, writes, fired, failures;
 static evutil_socket_t *pipes;
 static int num_pipes, num_active, num_writes;
 static struct event *events;
@@ -71,12 +75,19 @@ read_cb(evutil_socket_t fd, short which, void *arg)
 {
 	ev_intptr_t idx = (ev_intptr_t) arg, widx = idx + 1;
 	u_char ch;
+	ev_ssize_t n;
 
-	count += recv(fd, (char*)&ch, sizeof(ch), 0);
+	n = recv(fd, (char*)&ch, sizeof(ch), 0);
+	if (n >= 0)
+		count += n;
+	else
+		failures++;
 	if (writes) {
 		if (widx >= num_pipes)
 			widx -= num_pipes;
-		send(pipes[2 * widx + 1], "e", 1, 0);
+		n = send(pipes[2 * widx + 1], "e", 1, 0);
+		if (n != 1)
+			failures++;
 		writes--;
 		fired++;
 	}
@@ -102,7 +113,7 @@ run_once(void)
 	space = num_pipes / num_active;
 	space = space * 2;
 	for (i = 0; i < num_active; i++, fired++)
-		send(pipes[i * space + 1], "e", 1, 0);
+		(void) send(pipes[i * space + 1], "e", 1, 0);
 
 	count = 0;
 	writes = num_writes;

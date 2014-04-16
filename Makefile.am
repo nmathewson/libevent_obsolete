@@ -38,7 +38,7 @@ RELEASE = -release 2.1
 #
 # Once an RC is out, DO NOT MAKE ANY ABI-BREAKING CHANGES IN THAT SERIES
 # UNLESS YOU REALLY REALLY HAVE TO.
-VERSION_INFO = 1:0:0
+VERSION_INFO = 4:0:0
 
 # History:          RELEASE    VERSION_INFO
 #  2.0.1-alpha --     2.0        1:0:0
@@ -65,8 +65,9 @@ VERSION_INFO = 1:0:0
 #
 # For Libevent 2.1:
 #  2.1.1-alpha --     2.1        1:0:0
-#  2.1.2-alpha--      2.2        2:0:1 (Backward-compatible)
-
+#  2.1.2-alpha --     2.1        1:0:0 (should have been 2:0:1)
+#  2.1.3-alpha --     2.1        3:0:0 (ABI changed slightly)
+#  2.1.4-alpha --     2.1        4:0:0 (ABI changed slightly)
 
 # ABI version history for this package effectively restarts every time
 # we change RELEASE.  Version 1.4.x had RELEASE of 1.4.
@@ -146,7 +147,7 @@ if BUILD_WIN32
 SYS_LIBS = -lws2_32 -lshell32 -ladvapi32
 SYS_SRC = win32select.c evthread_win32.c buffer_iocp.c event_iocp.c \
 	bufferevent_async.c
-SYS_INCLUDES = -IWIN32-Code
+SYS_INCLUDES = -IWIN32-Code -IWIN32-Code/nmake
 
 else
 
@@ -247,13 +248,14 @@ libevent_openssl_la_CPPFLAGS = $(AM_CPPFLAGS) $(OPENSSL_INCS)
 endif
 
 noinst_HEADERS +=				\
-	WIN32-Code/evconfig-private.h		\
-	WIN32-Code/event2/event-config.h	\
+	WIN32-Code/nmake/evconfig-private.h	\
+	WIN32-Code/nmake/event2/event-config.h	\
 	WIN32-Code/tree.h			\
 	bufferevent-internal.h			\
 	changelist-internal.h			\
 	compat/sys/queue.h			\
 	defer-internal.h			\
+	epolltable-internal.h			\
 	evbuffer-internal.h			\
 	evconfig-private.h			\
 	event-internal.h			\

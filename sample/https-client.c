@@ -10,15 +10,23 @@
   Loosely based on le-proxy.c.
  */
 
+// Get rid of OSX 10.7 and greater deprecation warnings.
+#if defined(__APPLE__) && defined(__clang__)
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
+#define snprintf _snprintf
+#define strcasecmp _stricmp 
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -38,6 +46,7 @@
 #include "openssl_hostname_validation.h"
 
 static struct event_base *base;
+static int ignore_cert = 0;
 
 static void
 http_request_done(struct evhttp_request *req, void *ctx)
@@ -87,9 +96,9 @@ static void
 syntax(void)
 {
 	fputs("Syntax:\n", stderr);
-	fputs("   https-client <https-url>\n", stderr);
+	fputs("   https-client -url <https-url> [-data data-file.bin] [-ignore-cert]\n", stderr);
 	fputs("Example:\n", stderr);
-	fputs("   https-client https://ip.appspot.com/\n", stderr);
+	fputs("   https-client -url https://ip.appspot.com/\n", stderr);
 
 	exit(1);
 }
@@ -124,9 +133,17 @@ static int cert_verify_callback(X509_STORE_CTX *x509_ctx, void *arg)
 	/* This is the function that OpenSSL would call if we hadn't called
 	 * SSL_CTX_set_cert_verify_callback().  Therefore, we are "wrapping"
 	 * the default functionality, rather than replacing it. */
-	int ok_so_far = X509_verify_cert(x509_ctx);
+	int ok_so_far = 0;
 
-	X509 *server_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
+	X509 *server_cert = NULL;
+
+	if (ignore_cert) {
+		return 1;
+	}
+
+	ok_so_far = X509_verify_cert(x509_ctx);
+
+	server_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
 
 	if (ok_so_far) {
 		res = validate_hostname(host, server_cert);
@@ -174,7 +191,8 @@ main(int argc, char **argv)
 	int r;
 
 	struct evhttp_uri *http_uri;
-	const char *url, *scheme, *host, *path, *query;
+	const char *url = NULL, *data_file = NULL;
+	const char *scheme, *host, *path, *query;
 	char uri[256];
 	int port;
 
@@ -184,11 +202,50 @@ main(int argc, char **argv)
 	struct evhttp_connection *evcon;
 	struct evhttp_request *req;
 	struct evkeyvalq *output_headers;
+	struct evbuffer * output_buffer;
 
-	if (argc != 2)
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (!strcmp("-url", argv[i])) {
+			if (i < argc - 1) {
+				url = argv[i + 1];
+			} else {
+				syntax();
+			}
+		} else if (!strcmp("-ignore-cert", argv[i])) {
+			ignore_cert = 1;
+		} else if (!strcmp("-data", argv[i])) {
+			if (i < argc - 1) {
+				data_file = argv[i + 1];
+			} else {
+				syntax();
+			}
+		} else if (!strcmp("-help", argv[i])) {
+			syntax();
+		}
+	}
+
+	if (!url) {
 		syntax();
+	}
 
-	url = argv[1];
+#ifdef _WIN32
+	{
+		WORD wVersionRequested;
+		WSADATA wsaData;
+		int err;
+
+		wVersionRequested = MAKEWORD(2, 2);
+
+		err = WSAStartup(wVersionRequested, &wsaData);
+		if (err != 0) {
+			printf("WSAStartup failed with error: %d\n", err);
+			return 1;
+		}
+	}
+#endif // _WIN32
+
 	http_uri = evhttp_uri_parse(url);
 	if (http_uri == NULL) {
 		die("malformed url");
@@ -241,6 +298,9 @@ main(int argc, char **argv)
 	if (!ssl_ctx)
 		die_openssl("SSL_CTX_new");
 
+	#ifndef _WIN32
+	/* TODO: Add certificate loading on Windows as well */
+
 	/* Attempt to use the system's trusted root certificates.
 	 * (This path is only valid for Debian-based systems.) */
 	if (1 != SSL_CTX_load_verify_locations(ssl_ctx,
@@ -271,6 +331,7 @@ main(int argc, char **argv)
 	 * "wrapping" OpenSSL's routine, not replacing it. */
 	SSL_CTX_set_cert_verify_callback (ssl_ctx, cert_verify_callback,
 					  (void *) host);
+	#endif // not _WIN32
 
 	// Create event base
 	base = event_base_new();
@@ -284,6 +345,9 @@ main(int argc, char **argv)
 	if (ssl == NULL) {
 		die_openssl("SSL_new()");
 	}
+
+	// Set hostname for SNI extension
+	SSL_set_tlsext_host_name(ssl, host);
 
 	if (strcasecmp(scheme, "http") == 0) {
 		bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
@@ -320,7 +384,30 @@ main(int argc, char **argv)
 	evhttp_add_header(output_headers, "Host", host);
 	evhttp_add_header(output_headers, "Connection", "close");
 
-	r = evhttp_make_request(evcon, req, EVHTTP_REQ_GET, uri);
+	if (data_file) {
+		/* NOTE: In production code, you'd probably want to use
+		 * evbuffer_add_file() or evbuffer_add_file_segment(), to
+		 * avoid needless copying. */
+		FILE * f = fopen(data_file, "rb");
+		char buf[1024];
+		size_t s;
+		size_t bytes = 0;
+
+		if (!f) {
+			syntax();
+		}
+
+		output_buffer = evhttp_request_get_output_buffer(req);
+		while ((s = fread(buf, 1, sizeof(buf), f)) > 0) {
+			evbuffer_add(output_buffer, buf, s);
+			bytes += s;
+		}
+		evutil_snprintf(buf, sizeof(buf)-1, "%lu", (unsigned long)bytes);
+		evhttp_add_header(output_headers, "Content-Length", buf);
+		fclose(f);
+	}
+
+	r = evhttp_make_request(evcon, req, data_file ? EVHTTP_REQ_POST : EVHTTP_REQ_GET, uri);
 	if (r != 0) {
 		fprintf(stderr, "evhttp_make_request() failed\n");
 		return 1;
@@ -330,6 +417,10 @@ main(int argc, char **argv)
 
 	evhttp_connection_free(evcon);
 	event_base_free(base);
+
+#ifdef _WIN32
+	WSACleanup();
+#endif
 
 	return 0;
 }

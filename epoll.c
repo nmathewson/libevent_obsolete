@@ -60,6 +60,18 @@
 #include "changelist-internal.h"
 #include "time-internal.h"
 
+/* Since Linux 2.6.17, epoll is able to report about peer half-closed connection
+   using special EPOLLRDHUP flag on a read event.
+*/
+#if !defined(EPOLLRDHUP)
+#define EPOLLRDHUP 0
+#define EARLY_CLOSE_IF_HAVE_RDHUP 0
+#else
+#define EARLY_CLOSE_IF_HAVE_RDHUP EV_FEATURE_EARLY_CLOSE
+#endif
+
+#include "epolltable-internal.h"
+
 #if defined(EVENT__HAVE_SYS_TIMERFD_H) &&			  \
 	defined(EVENT__HAVE_TIMERFD_CREATE) &&			  \
 	defined(HAVE_POSIX_MONOTONIC) && defined(TFD_NONBLOCK) && \
@@ -92,7 +104,7 @@ static const struct eventop epollops_changelist = {
 	epoll_dispatch,
 	epoll_dealloc,
 	1, /* need reinit */
-	EV_FEATURE_ET|EV_FEATURE_O1,
+	EV_FEATURE_ET|EV_FEATURE_O1| EARLY_CLOSE_IF_HAVE_RDHUP,
 	EVENT_CHANGELIST_FDINFO_SIZE
 };
 
@@ -110,7 +122,7 @@ const struct eventop epollops = {
 	epoll_dispatch,
 	epoll_dealloc,
 	1, /* need reinit */
-	EV_FEATURE_ET|EV_FEATURE_O1,
+	EV_FEATURE_ET|EV_FEATURE_O1|EV_FEATURE_EARLY_CLOSE,
 	0
 };
 
@@ -234,171 +246,6 @@ epoll_op_to_string(int op)
 	    "???";
 }
 
-/*
-  Here are the values we're masking off to decide what operations to do.
-  Note that since EV_READ|EV_WRITE.
-
-  Note also that this table is a little sparse, since ADD+DEL is
-  nonsensical ("xxx" in the list below.)
-
-  Note also also that we are shifting old_events by only 3 bits, since
-  EV_READ is 2 and EV_WRITE is 4.
-
-  The table was auto-generated with a python script, according to this
-  pseudocode:
-
-      If either the read or the write change is add+del:
-	 This is impossible; Set op==-1, events=0.
-      Else, if either the read or the write change is add:
-	 Set events to 0.
-	 If the read change is add, or
-	    (the read change is not del, and ev_read is in old_events):
-	       Add EPOLLIN to events.
-	 If the write change is add, or
-	    (the write change is not del, and ev_write is in old_events):
-	       Add EPOLLOUT to events.
-
-	 If old_events is set:
-	       Set op to EPOLL_CTL_MOD [*1,*2]
-	Else:
-	       Set op to EPOLL_CTL_ADD [*3]
-
-      Else, if the read or the write change is del:
-	 Set op to EPOLL_CTL_DEL.
-	 If the read change is del:
-	     If the write change is del:
-		 Set events to EPOLLIN|EPOLLOUT
-	     Else if ev_write is in old_events:
-		 Set events to EPOLLOUT
-		Set op to EPOLL_CTL_MOD
-	     Else
-		 Set events to EPOLLIN
-	 Else:
-	     {The write change is del.}
-	    If ev_read is in old_events:
-		 Set events to EPOLLIN
-		Set op to EPOLL_CTL_MOD
-	    Else:
-		Set the events to EPOLLOUT
-
-      Else:
-	   There is no read or write change; set op to 0 and events to 0.
-
-      The logic is a little tricky, since we had no events set on the fd before,
-      we need to set op="ADD" and set events=the events we want to add.	 If we
-      had any events set on the fd before, and we want any events to remain on
-      the fd, we need to say op="MOD" and set events=the events we want to
-      remain.  But if we want to delete the last event, we say op="DEL" and
-      set events=(any non-null pointer).
-
-  [*1] This MOD is only a guess.  MOD might fail with ENOENT if the file was
-       closed and a new file was opened with the same fd.  If so, we'll retry
-       with ADD.
-
-  [*2] We can't replace this with a no-op even if old_events is the same as
-       the new events: if the file was closed and reopened, we need to retry
-       with an ADD.  (We do a MOD in this case since "no change" is more
-       common than "close and reopen", so we'll usually wind up doing 1
-       syscalls instead of 2.)
-
-  [*3] This ADD is only a guess.  There is a fun Linux kernel issue where if
-       you have two fds for the same file (via dup) and you ADD one to an
-       epfd, then close it, then re-create it with the same fd (via dup2 or an
-       unlucky dup), then try to ADD it again, you'll get an EEXIST, since the
-       struct epitem is not actually removed from the struct eventpoll until
-       the file itself is closed.
-
-  EV_CHANGE_ADD==1
-  EV_CHANGE_DEL==2
-  EV_READ      ==2
-  EV_WRITE     ==4
-  Bit 0: read change is add
-  Bit 1: read change is del
-  Bit 2: write change is add
-  Bit 3: write change is del
-  Bit 4: old events had EV_READ
-  Bit 5: old events had EV_WRITE
-*/
-
-#define INDEX(c) \
-	(   (((c)->read_change&(EV_CHANGE_ADD|EV_CHANGE_DEL))) |       \
-	    (((c)->write_change&(EV_CHANGE_ADD|EV_CHANGE_DEL)) << 2) | \
-	    (((c)->old_events&(EV_READ|EV_WRITE)) << 3) )
-
-#if EV_READ != 2 || EV_WRITE != 4 || EV_CHANGE_ADD != 1 || EV_CHANGE_DEL != 2
-#error "Libevent's internals changed!  Regenerate the op_table in epoll.c"
-#endif
-
-static const struct operation {
-	int events;
-	int op;
-} op_table[] = {
-	{ 0, 0 },                           /* old= 0, write:  0, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_ADD },         /* old= 0, write:  0, read:add */
-	{ EPOLLIN, EPOLL_CTL_DEL },         /* old= 0, write:  0, read:del */
-	{ 0, -1 },                          /* old= 0, write:  0, read:xxx */
-	{ EPOLLOUT, EPOLL_CTL_ADD },        /* old= 0, write:add, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_ADD },/* old= 0, write:add, read:add */
-	{ EPOLLOUT, EPOLL_CTL_ADD },        /* old= 0, write:add, read:del */
-	{ 0, -1 },                          /* old= 0, write:add, read:xxx */
-	{ EPOLLOUT, EPOLL_CTL_DEL },        /* old= 0, write:del, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_ADD },         /* old= 0, write:del, read:add */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_DEL },/* old= 0, write:del, read:del */
-	{ 0, -1 },                          /* old= 0, write:del, read:xxx */
-	{ 0, -1 },                          /* old= 0, write:xxx, read:  0 */
-	{ 0, -1 },                          /* old= 0, write:xxx, read:add */
-	{ 0, -1 },                          /* old= 0, write:xxx, read:del */
-	{ 0, -1 },                          /* old= 0, write:xxx, read:xxx */
-	{ 0, 0 },                           /* old= r, write:  0, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old= r, write:  0, read:add */
-	{ EPOLLIN, EPOLL_CTL_DEL },         /* old= r, write:  0, read:del */
-	{ 0, -1 },                          /* old= r, write:  0, read:xxx */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old= r, write:add, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old= r, write:add, read:add */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old= r, write:add, read:del */
-	{ 0, -1 },                          /* old= r, write:add, read:xxx */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old= r, write:del, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old= r, write:del, read:add */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_DEL },/* old= r, write:del, read:del */
-	{ 0, -1 },                          /* old= r, write:del, read:xxx */
-	{ 0, -1 },                          /* old= r, write:xxx, read:  0 */
-	{ 0, -1 },                          /* old= r, write:xxx, read:add */
-	{ 0, -1 },                          /* old= r, write:xxx, read:del */
-	{ 0, -1 },                          /* old= r, write:xxx, read:xxx */
-	{ 0, 0 },                           /* old= w, write:  0, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old= w, write:  0, read:add */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old= w, write:  0, read:del */
-	{ 0, -1 },                          /* old= w, write:  0, read:xxx */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old= w, write:add, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old= w, write:add, read:add */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old= w, write:add, read:del */
-	{ 0, -1 },                          /* old= w, write:add, read:xxx */
-	{ EPOLLOUT, EPOLL_CTL_DEL },        /* old= w, write:del, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old= w, write:del, read:add */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_DEL },/* old= w, write:del, read:del */
-	{ 0, -1 },                          /* old= w, write:del, read:xxx */
-	{ 0, -1 },                          /* old= w, write:xxx, read:  0 */
-	{ 0, -1 },                          /* old= w, write:xxx, read:add */
-	{ 0, -1 },                          /* old= w, write:xxx, read:del */
-	{ 0, -1 },                          /* old= w, write:xxx, read:xxx */
-	{ 0, 0 },                           /* old=rw, write:  0, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old=rw, write:  0, read:add */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old=rw, write:  0, read:del */
-	{ 0, -1 },                          /* old=rw, write:  0, read:xxx */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old=rw, write:add, read:  0 */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD },/* old=rw, write:add, read:add */
-	{ EPOLLOUT, EPOLL_CTL_MOD },        /* old=rw, write:add, read:del */
-	{ 0, -1 },                          /* old=rw, write:add, read:xxx */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old=rw, write:del, read:  0 */
-	{ EPOLLIN, EPOLL_CTL_MOD },         /* old=rw, write:del, read:add */
-	{ EPOLLIN|EPOLLOUT, EPOLL_CTL_DEL },/* old=rw, write:del, read:del */
-	{ 0, -1 },                          /* old=rw, write:del, read:xxx */
-	{ 0, -1 },                          /* old=rw, write:xxx, read:  0 */
-	{ 0, -1 },                          /* old=rw, write:xxx, read:add */
-	{ 0, -1 },                          /* old=rw, write:xxx, read:del */
-	{ 0, -1 },                          /* old=rw, write:xxx, read:xxx */
-};
-
 static int
 epoll_apply_one_change(struct event_base *base,
     struct epollop *epollop,
@@ -408,9 +255,9 @@ epoll_apply_one_change(struct event_base *base,
 	int op, events = 0;
 	int idx;
 
-	idx = INDEX(ch);
-	op = op_table[idx].op;
-	events = op_table[idx].events;
+	idx = EPOLL_OP_TABLE_INDEX(ch);
+	op = epoll_op_table[idx].op;
+	events = epoll_op_table[idx].events;
 
 	if (!events) {
 		EVUTIL_ASSERT(op == 0);
@@ -424,13 +271,14 @@ epoll_apply_one_change(struct event_base *base,
 	epev.data.fd = ch->fd;
 	epev.events = events;
 	if (epoll_ctl(epollop->epfd, op, ch->fd, &epev) == 0) {
-		event_debug(("Epoll %s(%d) on fd %d okay. [old events were %d; read change was %d; write change was %d]",
+		event_debug(("Epoll %s(%d) on fd %d okay. [old events were %d; read change was %d; write change was %d; close change was %d]",
 			epoll_op_to_string(op),
 			(int)epev.events,
 			(int)ch->fd,
 			ch->old_events,
 			ch->read_change,
-			ch->write_change));
+			ch->write_change,
+			ch->close_change));
 		return 0;
 	}
 
@@ -490,7 +338,7 @@ epoll_apply_one_change(struct event_base *base,
 		break;
 	}
 
-	event_warn("Epoll %s(%d) on fd %d failed.  Old events were %d; read change was %d (%s); write change was %d (%s)",
+	event_warn("Epoll %s(%d) on fd %d failed.  Old events were %d; read change was %d (%s); write change was %d (%s); close change was %d (%s)",
 	    epoll_op_to_string(op),
 	    (int)epev.events,
 	    ch->fd,
@@ -498,7 +346,9 @@ epoll_apply_one_change(struct event_base *base,
 	    ch->read_change,
 	    change_to_string(ch->read_change),
 	    ch->write_change,
-	    change_to_string(ch->write_change));
+	    change_to_string(ch->write_change),
+	    ch->close_change,
+	    change_to_string(ch->close_change));
 
 	return -1;
 }
@@ -529,12 +379,15 @@ epoll_nochangelist_add(struct event_base *base, evutil_socket_t fd,
 	struct event_change ch;
 	ch.fd = fd;
 	ch.old_events = old;
-	ch.read_change = ch.write_change = 0;
+	ch.read_change = ch.write_change = ch.close_change = 0;
 	if (events & EV_WRITE)
 		ch.write_change = EV_CHANGE_ADD |
 		    (events & EV_ET);
 	if (events & EV_READ)
 		ch.read_change = EV_CHANGE_ADD |
+		    (events & EV_ET);
+	if (events & EV_CLOSED)
+		ch.close_change = EV_CHANGE_ADD |
 		    (events & EV_ET);
 
 	return epoll_apply_one_change(base, base->evbase, &ch);
@@ -547,11 +400,13 @@ epoll_nochangelist_del(struct event_base *base, evutil_socket_t fd,
 	struct event_change ch;
 	ch.fd = fd;
 	ch.old_events = old;
-	ch.read_change = ch.write_change = 0;
+	ch.read_change = ch.write_change = ch.close_change = 0;
 	if (events & EV_WRITE)
 		ch.write_change = EV_CHANGE_DEL;
 	if (events & EV_READ)
 		ch.read_change = EV_CHANGE_DEL;
+	if (events & EV_CLOSED)
+		ch.close_change = EV_CHANGE_DEL;
 
 	return epoll_apply_one_change(base, base->evbase, &ch);
 }
@@ -636,6 +491,8 @@ epoll_dispatch(struct event_base *base, struct timeval *tv)
 				ev |= EV_READ;
 			if (what & EPOLLOUT)
 				ev |= EV_WRITE;
+			if (what & EPOLLRDHUP)
+				ev |= EV_CLOSED;
 		}
 
 		if (!ev)

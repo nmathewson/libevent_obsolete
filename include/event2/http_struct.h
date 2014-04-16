@@ -120,6 +120,28 @@ struct {
 	 * the regular callback.
 	 */
 	void (*chunk_cb)(struct evhttp_request *, void *);
+
+	/*
+	 * Callback added for forked-daapd so they can collect ICY
+	 * (shoutcast) metadata from the http header. If return
+	 * int is negative the connection will be closed.
+	 */
+	int (*header_cb)(struct evhttp_request *, void *);
+
+	/*
+	 * Error callback - called when error is occured.
+	 * @see evhttp_request_error for error types.
+	 *
+	 * @see evhttp_request_set_error_cb()
+	 */
+	void (*error_cb)(enum evhttp_request_error, void *);
+
+	/*
+	 * Send complete callback - called when the request is actually
+	 * sent and completed.
+	 */
+	void (*on_complete_cb)(struct evhttp_request *, void *);
+	void *on_complete_cb_arg;
 };
 
 #ifdef __cplusplus

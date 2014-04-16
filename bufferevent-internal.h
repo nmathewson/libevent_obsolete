@@ -252,8 +252,13 @@ struct bufferevent_ops {
 	 */
 	int (*disable)(struct bufferevent *, short);
 
+	/** Detatches the bufferevent from related data structures. Called as
+	 * soon as its reference count reaches 0. */
+	void (*unlink)(struct bufferevent *);
+
 	/** Free any storage and deallocate any extra data or structures used
-	    in this implementation.
+	    in this implementation. Called when the bufferevent is
+	    finalized.
 	 */
 	void (*destruct)(struct bufferevent *);
 
@@ -335,14 +340,34 @@ int bufferevent_decref_(struct bufferevent *bufev);
 int bufferevent_decref_and_unlock_(struct bufferevent *bufev);
 
 /** Internal: If callbacks are deferred and we have a read callback, schedule
- * a readcb.  Otherwise just run the readcb. */
-void bufferevent_run_readcb_(struct bufferevent *bufev);
+ * a readcb.  Otherwise just run the readcb. Ignores watermarks. */
+void bufferevent_run_readcb_(struct bufferevent *bufev, int options);
 /** Internal: If callbacks are deferred and we have a write callback, schedule
- * a writecb.  Otherwise just run the writecb. */
-void bufferevent_run_writecb_(struct bufferevent *bufev);
+ * a writecb.  Otherwise just run the writecb. Ignores watermarks. */
+void bufferevent_run_writecb_(struct bufferevent *bufev, int options);
 /** Internal: If callbacks are deferred and we have an eventcb, schedule
- * it to run with events "what".  Otherwise just run the eventcb. */
-void bufferevent_run_eventcb_(struct bufferevent *bufev, short what);
+ * it to run with events "what".  Otherwise just run the eventcb.
+ * See bufferevent_trigger_event for meaning of "options". */
+void bufferevent_run_eventcb_(struct bufferevent *bufev, short what, int options);
+
+/** Internal: Run or schedule (if deferred or options contain
+ * BEV_TRIG_DEFER_CALLBACKS) I/O callbacks specified in iotype.
+ * Must already hold the bufev lock. Honors watermarks unless
+ * BEV_TRIG_IGNORE_WATERMARKS is in options. */
+static inline void bufferevent_trigger_nolock_(struct bufferevent *bufev, short iotype, int options);
+
+/* Making this inline since all of the common-case calls to this function in
+ * libevent use constant arguments. */
+static inline void
+bufferevent_trigger_nolock_(struct bufferevent *bufev, short iotype, int options)
+{
+	if ((iotype & EV_READ) && ((options & BEV_TRIG_IGNORE_WATERMARKS) ||
+	    evbuffer_get_length(bufev->input) >= bufev->wm_read.low))
+		bufferevent_run_readcb_(bufev, options);
+	if ((iotype & EV_WRITE) && ((options & BEV_TRIG_IGNORE_WATERMARKS) ||
+	    evbuffer_get_length(bufev->output) <= bufev->wm_write.low))
+		bufferevent_run_writecb_(bufev, options);
+}
 
 /** Internal: Add the event 'ev' with timeout tv, unless tv is set to 0, in
  * which case add ev with no timeout. */
@@ -356,14 +381,13 @@ int bufferevent_add_event_(struct event *ev, const struct timeval *tv);
  * the other "generic_timeout" functions will work on it.  Call this from
  * the constructor function. */
 void bufferevent_init_generic_timeout_cbs_(struct bufferevent *bev);
-/** Internal use: Delete the ev_read and ev_write callbacks if they're pending.
- * Call this from the destructor function. */
-int bufferevent_del_generic_timeout_cbs_(struct bufferevent *bev);
 /** Internal use: Add or delete the generic timeout events as appropriate.
  * (If an event is enabled and a timeout is set, we add the event.  Otherwise
  * we delete it.)  Call this from anything that changes the timeout values,
  * that enabled EV_READ or EV_WRITE, or that disables EV_READ or EV_WRITE. */
 int bufferevent_generic_adj_timeouts_(struct bufferevent *bev);
+
+enum bufferevent_options bufferevent_get_options_(struct bufferevent *bev);
 
 /** Internal use: We have just successfully read data into an inbuf, so
  * reset the read timeout (if any). */

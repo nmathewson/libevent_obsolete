@@ -92,10 +92,6 @@
 #include "event2/event_struct.h"
 #include "event2/thread.h"
 
-#include "event2/bufferevent.h"
-#include "event2/bufferevent_struct.h"
-#include "bufferevent-internal.h"
-
 #include "defer-internal.h"
 #include "log-internal.h"
 #include "mm-internal.h"
@@ -119,9 +115,9 @@
 #include <netinet/in6.h>
 #endif
 
-#define EVDNS_LOG_DEBUG 0
-#define EVDNS_LOG_WARN 1
-#define EVDNS_LOG_MSG 2
+#define EVDNS_LOG_DEBUG EVENT_LOG_DEBUG
+#define EVDNS_LOG_WARN EVENT_LOG_WARN
+#define EVDNS_LOG_MSG EVENT_LOG_MSG
 
 #ifndef HOST_NAME_MAX
 #define HOST_NAME_MAX 255
@@ -236,6 +232,10 @@ struct nameserver {
 	char choked;  /* true if we have an EAGAIN from this server's socket */
 	char write_waiting;  /* true if we are waiting for EV_WRITE events */
 	struct evdns_base *base;
+
+	/* Number of currently inflight requests: used
+	 * to track when we should add/del the event. */
+	int requests_inflight;
 };
 
 
@@ -358,6 +358,8 @@ struct evdns_base {
 #ifndef EVENT__DISABLE_THREAD_SUPPORT
 	void *lock;
 #endif
+
+	int disable_when_inactive;
 };
 
 struct hosts_entry {
@@ -410,6 +412,7 @@ static int evdns_base_resolv_conf_parse_impl(struct evdns_base *base, int flags,
 static int evdns_base_set_option_impl(struct evdns_base *base,
     const char *option, const char *val, int flags);
 static void evdns_base_free_and_unlock(struct evdns_base *base, int fail_requests);
+static void evdns_request_timeout_callback(evutil_socket_t fd, short events, void *arg);
 
 static int strtoint(const char *const str);
 
@@ -426,17 +429,6 @@ static int strtoint(const char *const str);
 	EVLOCK_ASSERT_LOCKED((base)->lock)
 #endif
 
-static void
-default_evdns_log_fn(int warning, const char *buf)
-{
-	if (warning == EVDNS_LOG_WARN)
-		event_warnx("[evdns] %s", buf);
-	else if (warning == EVDNS_LOG_MSG)
-		event_msgx("[evdns] %s", buf);
-	else
-		event_debug(("[evdns] %s", buf));
-}
-
 static evdns_debug_log_fn_type evdns_log_fn = NULL;
 
 void
@@ -451,25 +443,21 @@ evdns_set_log_fn(evdns_debug_log_fn_type fn)
 #define EVDNS_LOG_CHECK
 #endif
 
-static void evdns_log_(int warn, const char *fmt, ...) EVDNS_LOG_CHECK;
+static void evdns_log_(int severity, const char *fmt, ...) EVDNS_LOG_CHECK;
 static void
-evdns_log_(int warn, const char *fmt, ...)
+evdns_log_(int severity, const char *fmt, ...)
 {
 	va_list args;
-	char buf[512];
-	if (!evdns_log_fn)
-		return;
 	va_start(args,fmt);
-	evutil_vsnprintf(buf, sizeof(buf), fmt, args);
-	va_end(args);
 	if (evdns_log_fn) {
-		if (warn == EVDNS_LOG_MSG)
-			warn = EVDNS_LOG_WARN;
-		evdns_log_fn(warn, buf);
+		char buf[512];
+		int is_warn = (severity == EVDNS_LOG_WARN);
+		evutil_vsnprintf(buf, sizeof(buf), fmt, args);
+		evdns_log_fn(is_warn, buf);
 	} else {
-		default_evdns_log_fn(warn, buf);
+		event_logv_(severity, NULL, fmt, args);
 	}
-
+	va_end(args);
 }
 
 #define log evdns_log_
@@ -660,11 +648,18 @@ request_finished(struct request *const req, struct request **head, int free_hand
 	if (was_inflight) {
 		evtimer_del(&req->timeout_event);
 		base->global_requests_inflight--;
+		req->ns->requests_inflight--;
 	} else {
 		base->global_requests_waiting--;
 	}
 	/* it was initialized during request_new / evtimer_assign */
 	event_debug_unassign(&req->timeout_event);
+
+	if (req->ns &&
+	    req->ns->requests_inflight == 0 &&
+	    req->base->disable_when_inactive) {
+		event_del(&req->ns->event);
+	}
 
 	if (!req->request_appended) {
 		/* need to free the request data on it's own */
@@ -729,21 +724,31 @@ request_reissue(struct request *req) {
 
 /* this function looks for space on the inflight queue and promotes */
 /* requests from the waiting queue if it can. */
+/* */
+/* TODO: */
+/* add return code, see at nameserver_pick() and other functions. */
 static void
 evdns_requests_pump_waiting_queue(struct evdns_base *base) {
 	ASSERT_LOCKED(base);
 	while (base->global_requests_inflight < base->global_max_requests_inflight &&
 		   base->global_requests_waiting) {
 		struct request *req;
-		/* move a request from the waiting queue to the inflight queue */
+
 		EVUTIL_ASSERT(base->req_waiting_head);
 		req = base->req_waiting_head;
+
+		req->ns = nameserver_pick(base);
+		if (!req->ns)
+			return;
+
+		/* move a request from the waiting queue to the inflight queue */
+		req->ns->requests_inflight++;
+
 		evdns_request_remove(req, &base->req_waiting_head);
 
 		base->global_requests_waiting--;
 		base->global_requests_inflight++;
 
-		req->ns = nameserver_pick(base);
 		request_trans_id_set(req, transaction_id_pick(base));
 
 		evdns_request_insert(req, &REQ_HEAD(base, req->trans_id));
@@ -899,7 +904,9 @@ reply_handle(struct request *const req, u16 flags, u32 ttl, struct reply *reply)
 			    evutil_format_sockaddr_port_(
 				    (struct sockaddr *)&req->ns->address,
 				    addrbuf, sizeof(addrbuf)));
-			break;
+			/* Call the timeout function */
+			evdns_request_timeout_callback(0, 0, req);
+			return;
 		default:
 			/* we got a good reply from the nameserver: it is up. */
 			if (req->handle == req->ns->probe_request) {
@@ -2188,6 +2195,13 @@ evdns_request_transmit_to(struct request *req, struct nameserver *server) {
 	int r;
 	ASSERT_LOCKED(req->base);
 	ASSERT_VALID_REQUEST(req);
+
+	if (server->requests_inflight == 1 &&
+		req->base->disable_when_inactive &&
+		event_add(&server->event, NULL) < 0) {
+		return 1;
+	}
+
 	r = sendto(server->socket, (void*)req->request, req->request_len, 0,
 	    (struct sockaddr *)&server->address, server->addrlen);
 	if (r < 0) {
@@ -2219,6 +2233,12 @@ evdns_request_transmit(struct request *req) {
 	/* for evdns_transmit */
 	req->transmit_me = 1;
 	EVUTIL_ASSERT(req->trans_id != 0xffff);
+
+	if (!req->ns)
+	{
+		/* unable to transmit request if no nameservers */
+		return 1;
+	}
 
 	if (req->ns->choked) {
 		/* don't bother trying to write to a socket */
@@ -2440,6 +2460,7 @@ evdns_base_resume(struct evdns_base *base)
 	EVDNS_LOCK(base);
 	evdns_requests_pump_waiting_queue(base);
 	EVDNS_UNLOCK(base);
+
 	return 0;
 }
 
@@ -2496,8 +2517,9 @@ evdns_nameserver_add_impl_(struct evdns_base *base, const struct sockaddr *addre
 	memcpy(&ns->address, address, addrlen);
 	ns->addrlen = addrlen;
 	ns->state = 1;
-	event_assign(&ns->event, ns->base->event_base, ns->socket, EV_READ | EV_PERSIST, nameserver_ready_callback, ns);
-	if (event_add(&ns->event, NULL) < 0) {
+	event_assign(&ns->event, ns->base->event_base, ns->socket,
+				 EV_READ | EV_PERSIST, nameserver_ready_callback, ns);
+	if (!base->disable_when_inactive && event_add(&ns->event, NULL) < 0) {
 		err = 2;
 		goto out2;
 	}
@@ -2768,7 +2790,10 @@ request_submit(struct request *const req) {
 		/* if it has a nameserver assigned then this is going */
 		/* straight into the inflight queue */
 		evdns_request_insert(req, &REQ_HEAD(base, req->trans_id));
+
 		base->global_requests_inflight++;
+		req->ns->requests_inflight++;
+
 		evdns_request_transmit(req);
 	} else {
 		evdns_request_insert(req, &base->req_waiting_head);
@@ -3829,7 +3854,7 @@ evdns_config_windows_nameservers(void)
 #endif
 
 struct evdns_base *
-evdns_base_new(struct event_base *event_base, int initialize_nameservers)
+evdns_base_new(struct event_base *event_base, int flags)
 {
 	struct evdns_base *base;
 
@@ -3877,7 +3902,16 @@ evdns_base_new(struct event_base *event_base, int initialize_nameservers)
 
 	TAILQ_INIT(&base->hostsdb);
 
-	if (initialize_nameservers) {
+#define EVDNS_BASE_ALL_FLAGS (0x8001)
+	if (flags & ~EVDNS_BASE_ALL_FLAGS) {
+		flags = EVDNS_BASE_INITIALIZE_NAMESERVERS;
+		log(EVDNS_LOG_WARN,
+		    "Unrecognized flag passed to evdns_base_new(). Assuming "
+		    "you meant EVDNS_BASE_INITIALIZE_NAMESERVERS.");
+	}
+#undef EVDNS_BASE_ALL_FLAGS
+
+	if (flags & EVDNS_BASE_INITIALIZE_NAMESERVERS) {
 		int r;
 #ifdef _WIN32
 		r = evdns_base_config_windows_nameservers(base);
@@ -3889,6 +3923,10 @@ evdns_base_new(struct event_base *event_base, int initialize_nameservers)
 			return NULL;
 		}
 	}
+	if (flags & EVDNS_BASE_DISABLE_WHEN_INACTIVE) {
+		base->disable_when_inactive = 1;
+	}
+
 	EVDNS_UNLOCK(base);
 	return base;
 }
@@ -3935,6 +3973,10 @@ evdns_nameserver_free(struct nameserver *server)
 	event_debug_unassign(&server->event);
 	if (server->state == 0)
 		(void) event_del(&server->timeout_event);
+	if (server->probe_request) {
+		evdns_cancel_request(server->base, server->probe_request);
+		server->probe_request = NULL;
+	}
 	event_debug_unassign(&server->timeout_event);
 	mm_free(server);
 }
@@ -3950,6 +3992,15 @@ evdns_base_free_and_unlock(struct evdns_base *base, int fail_requests)
 
 	/* TODO(nickm) we might need to refcount here. */
 
+	for (server = base->server_head; server; server = server_next) {
+		server_next = server->next;
+		evdns_nameserver_free(server);
+		if (server_next == base->server_head)
+			break;
+	}
+	base->server_head = NULL;
+	base->global_good_nameservers = 0;
+
 	for (i = 0; i < base->n_req_heads; ++i) {
 		while (base->req_heads[i]) {
 			if (fail_requests)
@@ -3964,14 +4015,6 @@ evdns_base_free_and_unlock(struct evdns_base *base, int fail_requests)
 	}
 	base->global_requests_inflight = base->global_requests_waiting = 0;
 
-	for (server = base->server_head; server; server = server_next) {
-		server_next = server->next;
-		evdns_nameserver_free(server);
-		if (server_next == base->server_head)
-			break;
-	}
-	base->server_head = NULL;
-	base->global_good_nameservers = 0;
 
 	if (base->global_search_state) {
 		for (dom = base->global_search_state->head; dom; dom = dom_next) {
@@ -4003,6 +4046,18 @@ evdns_base_free(struct evdns_base *base, int fail_requests)
 {
 	EVDNS_LOCK(base);
 	evdns_base_free_and_unlock(base, fail_requests);
+}
+
+void
+evdns_base_clear_host_addresses(struct evdns_base *base)
+{
+	struct hosts_entry *victim;
+	EVDNS_LOCK(base);
+	while ((victim = TAILQ_FIRST(&base->hostsdb))) {
+		TAILQ_REMOVE(&base->hostsdb, victim, next);
+		mm_free(victim);
+	}
+	EVDNS_UNLOCK(base);
 }
 
 void

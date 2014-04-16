@@ -5,7 +5,7 @@ dnl See LICENSE for copying information.
 dnl
 dnl Original version Dug Song <dugsong@monkey.org>
 
-AC_INIT(libevent,2.1.2-alpha-dev)
+AC_INIT(libevent,2.1.4-alpha-dev)
 AC_PREREQ(2.59)
 AC_CONFIG_SRCDIR(event.c)
 
@@ -14,7 +14,7 @@ AM_INIT_AUTOMAKE
 dnl AM_SILENT_RULES req. automake 1.11.  [no] defaults V=1
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_CONFIG_HEADERS(config.h  evconfig-private.h:evconfig-private.h.in)
-AC_DEFINE(NUMERIC_VERSION, 0x02010201, [Numeric representation of the version])
+AC_DEFINE(NUMERIC_VERSION, 0x02010401, [Numeric representation of the version])
 
 dnl Initialize prefix.
 if test "$prefix" = "NONE"; then
@@ -44,10 +44,15 @@ dnl the 'host' machine is where the resulting stuff runs.
 
 dnl Checks for programs.
 AM_PROG_CC_C_O
-AC_PROG_SED
 AC_PROG_INSTALL
 AC_PROG_LN_S
 # AC_PROG_MKDIR_P - $(MKDIR_P) should be defined by AM_INIT_AUTOMAKE
+
+# AC_PROG_SED is only available in Autoconf >= 2.59b; workaround for older
+# versions
+ifdef([AC_PROG_SED], [AC_PROG_SED], [
+AC_CHECK_PROGS(SED, [gsed sed])
+])
 
 AC_PROG_GCC_TRADITIONAL
 
@@ -335,7 +340,6 @@ AC_CHECK_FUNCS([ \
   getnameinfo \
   getprotobynumber \
   gettimeofday \
-  inet_aton \
   inet_ntop \
   inet_pton \
   issetugid \
@@ -812,6 +816,15 @@ if test x$enable_gcc_warnings != xno && test "$GCC" = "yes"; then
     # Disable the unused-function warnings, because these trigger
     # for minheap-internal.h related code.
     CFLAGS="$CFLAGS -Wno-unused-function"
+
+    # clang on macosx emits warnigns for each directory specified which
+    # isn't "used" generating a lot of build noise (typically 3 warnings
+    # per file
+    case "$host_os" in
+        darwin*)
+            CFLAGS="$CFLAGS -Qunused-arguments"
+        ;;
+    esac
   fi
 
 ##This will break the world on some 64-bit architectures

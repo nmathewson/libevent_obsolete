@@ -323,9 +323,11 @@ evutil_make_socket_nonblocking(evutil_socket_t fd)
 			event_warn("fcntl(%d, F_GETFL)", fd);
 			return -1;
 		}
-		if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-			event_warn("fcntl(%d, F_SETFL)", fd);
-			return -1;
+		if (!(flags & O_NONBLOCK)) {
+			if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+				event_warn("fcntl(%d, F_SETFL)", fd);
+				return -1;
+			}
 		}
 	}
 #endif
@@ -388,9 +390,11 @@ evutil_make_socket_closeonexec(evutil_socket_t fd)
 		event_warn("fcntl(%d, F_GETFD)", fd);
 		return -1;
 	}
-	if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
-		event_warn("fcntl(%d, F_SETFD)", fd);
-		return -1;
+	if (!(flags & FD_CLOEXEC)) {
+		if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
+			event_warn("fcntl(%d, F_SETFD)", fd);
+			return -1;
+		}
 	}
 #endif
 	return 0;
@@ -1697,7 +1701,7 @@ evutil_socket_error_to_string(int errcode)
 		/* use LocalAlloc because FormatMessage does */
 		msg = LocalAlloc(LMEM_FIXED, len);
 		if (!msg) {
-			msg = "winsock error";
+			msg = (char *)"LocalAlloc failed during Winsock error";
 			goto done;
 		}
 		evutil_snprintf(msg, len, "winsock error 0x%08x", errcode);
@@ -1708,7 +1712,7 @@ evutil_socket_error_to_string(int errcode)
 
 	if (!newerr) {
 		LocalFree(msg);
-		msg = "winsock error";
+		msg = (char *)"malloc failed during Winsock error";
 		goto done;
 	}
 
@@ -1790,7 +1794,7 @@ evutil_vsnprintf(char *buf, size_t buflen, const char *format, va_list ap)
 	int r;
 	if (!buflen)
 		return 0;
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(_WIN32)
 	r = _vsnprintf(buf, buflen, format, ap);
 	if (r < 0)
 		r = _vscprintf(format, ap);
@@ -1914,15 +1918,15 @@ evutil_inet_pton(int af, const char *src, void *dst)
 	return inet_pton(af, src, dst);
 #else
 	if (af == AF_INET) {
-		int a,b,c,d;
+		unsigned a,b,c,d;
 		char more;
 		struct in_addr *addr = dst;
-		if (sscanf(src, "%d.%d.%d.%d%c", &a,&b,&c,&d,&more) != 4)
+		if (sscanf(src, "%u.%u.%u.%u%c", &a,&b,&c,&d,&more) != 4)
 			return 0;
-		if (a < 0 || a > 255) return 0;
-		if (b < 0 || b > 255) return 0;
-		if (c < 0 || c > 255) return 0;
-		if (d < 0 || d > 255) return 0;
+		if (a > 255) return 0;
+		if (b > 255) return 0;
+		if (c > 255) return 0;
+		if (d > 255) return 0;
 		addr->s_addr = htonl((a<<24) | (b<<16) | (c<<8) | d);
 		return 1;
 #ifdef AF_INET6
@@ -1937,7 +1941,7 @@ evutil_inet_pton(int af, const char *src, void *dst)
 		else if (!dot)
 			eow = src+strlen(src);
 		else {
-			int byte1,byte2,byte3,byte4;
+			unsigned byte1,byte2,byte3,byte4;
 			char more;
 			for (eow = dot-1; eow >= src && EVUTIL_ISDIGIT_(*eow); --eow)
 				;
@@ -1945,14 +1949,14 @@ evutil_inet_pton(int af, const char *src, void *dst)
 
 			/* We use "scanf" because some platform inet_aton()s are too lax
 			 * about IPv4 addresses of the form "1.2.3" */
-			if (sscanf(eow, "%d.%d.%d.%d%c",
+			if (sscanf(eow, "%u.%u.%u.%u%c",
 					   &byte1,&byte2,&byte3,&byte4,&more) != 4)
 				return 0;
 
-			if (byte1 > 255 || byte1 < 0 ||
-				byte2 > 255 || byte2 < 0 ||
-				byte3 > 255 || byte3 < 0 ||
-				byte4 > 255 || byte4 < 0)
+			if (byte1 > 255 ||
+			    byte2 > 255 ||
+			    byte3 > 255 ||
+			    byte4 > 255)
 				return 0;
 
 			words[6] = (byte1<<8) | byte2;
@@ -2394,6 +2398,18 @@ evutil_weakrand_range_(struct evutil_weakrand_state *state, ev_int32_t top)
 		result = evutil_weakrand_(state) / divisor;
 	} while (result >= top);
 	return result;
+}
+
+/**
+ * Volatile pointer to memset: we use this to keep the compiler from
+ * eliminating our call to memset.
+ */
+void * (*volatile evutil_memset_volatile_)(void *, int, size_t) = memset;
+
+void
+evutil_memclear_(void *mem, size_t len)
+{
+	evutil_memset_volatile_(mem, 0, len);
 }
 
 int

@@ -184,12 +184,13 @@ evutil_configure_monotonic_time_(struct evutil_monotonic_timer *base,
 	struct timespec	ts;
 
 #ifdef CLOCK_MONOTONIC_COARSE
-#if CLOCK_MONOTONIC_COARSE < 0
-	/* Technically speaking, nothing keeps CLOCK_* from being negative (as
-	 * far as I know). This check and the one below make sure that it's
-	 * safe for us to use -1 as an "unset" value. */
-#error "I didn't expect CLOCK_MONOTONIC_COARSE to be < 0"
-#endif
+	if (CLOCK_MONOTONIC_COARSE < 0) {
+		/* Technically speaking, nothing keeps CLOCK_* from being
+		 * negative (as far as I know). This check and the one below
+		 * make sure that it's safe for us to use -1 as an "unset"
+		 * value. */
+		event_errx(1,"I didn't expect CLOCK_MONOTONIC_COARSE to be < 0");
+	}
 	if (! precise && ! fallback) {
 		if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) == 0) {
 			base->monotonic_clock = CLOCK_MONOTONIC_COARSE;
@@ -202,9 +203,9 @@ evutil_configure_monotonic_time_(struct evutil_monotonic_timer *base,
 		return 0;
 	}
 
-#if CLOCK_MONOTONIC < 0
-#error "I didn't expect CLOCK_MONOTONIC to be < 0"
-#endif
+	if (CLOCK_MONOTONIC < 0) {
+		event_errx(1,"I didn't expect CLOCK_MONOTONIC to be < 0");
+	}
 
 	base->monotonic_clock = -1;
 	return 0;
@@ -443,14 +444,14 @@ evutil_gettime_monotonic_(struct evutil_monotonic_timer *base,
 			 * accurate as we can; adjust_monotnonic_time() below
 			 * will keep it monotonic. */
 			counter_usec_elapsed = ticks_elapsed * 1000;
-			base->first_counter = counter.QuadPart - counter_usec_elapsed / base->usec_per_count;
+			base->first_counter = (ev_uint64_t) (counter.QuadPart - counter_usec_elapsed / base->usec_per_count);
 		}
-		tp->tv_sec = counter_usec_elapsed / 1000000;
+		tp->tv_sec = (time_t) (counter_usec_elapsed / 1000000);
 		tp->tv_usec = counter_usec_elapsed % 1000000;
 
 	} else {
 		/* We're just using GetTickCount(). */
-		tp->tv_sec = ticks / 1000;
+		tp->tv_sec = (time_t) (ticks / 1000);
 		tp->tv_usec = (ticks % 1000) * 1000;
 	}
 	adjust_monotonic_time(base, tp);

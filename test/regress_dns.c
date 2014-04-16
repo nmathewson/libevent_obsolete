@@ -654,7 +654,7 @@ fail_server_cb(struct evdns_server_request *req, void *data)
 		event_base_loopexit(exit_base, NULL);
 	}
 
-	evutil_inet_pton(AF_INET, "16.32.64.128", &in);
+	tt_assert(evutil_inet_pton(AF_INET, "16.32.64.128", &in));
 	evdns_server_request_add_a_reply(req, question, 1, &in.s_addr,
 	    100);
 	tt_assert(! evdns_server_request_respond(req, 0))
@@ -1211,15 +1211,16 @@ test_getaddrinfo_async(void *arg)
 	struct evdns_server_port *port = NULL;
 	ev_uint16_t dns_port = 0;
 	int n_dns_questions = 0;
+	struct evdns_base *dns_base;
 
-	struct evdns_base *dns_base = evdns_base_new(data->base, 0);
+	memset(a_out, 0, sizeof(a_out));
+	memset(&local_outcome, 0, sizeof(local_outcome));
+
+	dns_base = evdns_base_new(data->base, 0);
 	tt_assert(dns_base);
 
 	/* for localhost */
 	evdns_base_load_hosts(dns_base, NULL);
-
-	memset(a_out, 0, sizeof(a_out));
-	memset(&local_outcome, 0, sizeof(local_outcome));
 
 	tt_assert(! evdns_base_set_option(dns_base, "timeout", "0.3"));
 	tt_assert(! evdns_base_set_option(dns_base, "getaddrinfo-allow-skew", "0.2"));
@@ -1562,7 +1563,8 @@ test_getaddrinfo_async(void *arg)
 end:
 	if (local_outcome.ai)
 		evutil_freeaddrinfo(local_outcome.ai);
-	for (i=0;i<10;++i) {
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+	for (i=0;i<(int)ARRAY_SIZE(a_out);++i) {
 		if (a_out[i].ai)
 			evutil_freeaddrinfo(a_out[i].ai);
 	}
@@ -1694,7 +1696,8 @@ testleak_setup(const struct testcase_t *testcase)
 
 	allocated_chunks = 0;
 	event_set_mem_functions(cnt_malloc, cnt_realloc, cnt_free);
-	event_enable_debug_mode();
+	if (!libevent_tests_running_in_debug_mode)
+		event_enable_debug_mode();
 
 	/* not mm_calloc: we don't want to mess with the count. */
 	env = calloc(1, sizeof(struct testleak_env_t));
@@ -1753,6 +1756,56 @@ test_dbg_leak_cancel(void *env_)
 	event_base_free(env->base);
 	env->base = 0;
 }
+
+static void
+dbg_leak_resume(void *env_, int cancel, int send_err_shutdown)
+{
+	/* cancel, loop, free/dns, free/base */
+	struct testleak_env_t *env = env_;
+	if (cancel) {
+		evdns_cancel_request(env->dns_base, env->req);
+		tt_assert(!evdns_base_resume(env->dns_base));
+	} else {
+		/* TODO: No nameservers, request can't be processed, must be errored */
+		tt_assert(!evdns_base_resume(env->dns_base));
+	}
+
+	/**
+	 * Because we don't cancel request,
+	 * and want our callback to recieve DNS_ERR_SHUTDOWN,
+	 * we use deferred callback, and there was
+	 * - one extra malloc(),
+	 *   @see reply_schedule_callback()
+	 * - and one missing free
+	 *   @see request_finished() (req->handle->pending_cb = 1)
+	 * than we don't need to count in testleak_cleanup()
+	 *
+	 * So just decrement allocated_chunks to 2,
+	 * like we already take care about it.
+	 */
+	if (!cancel && send_err_shutdown) {
+		allocated_chunks -= 2;
+	}
+
+	event_base_loop(env->base, EVLOOP_NONBLOCK);
+
+end:
+	evdns_base_free(env->dns_base, send_err_shutdown);
+	env->dns_base = 0;
+	event_base_free(env->base);
+	env->base = 0;
+}
+
+#define IMPL_DBG_LEAK_RESUME(name, cancel, send_err_shutdown)      \
+	static void                                                    \
+	test_dbg_leak_##name##_(void *env_)                            \
+	{                                                              \
+		dbg_leak_resume(env_, cancel, send_err_shutdown);          \
+	}
+IMPL_DBG_LEAK_RESUME(resume, 0, 0)
+IMPL_DBG_LEAK_RESUME(cancel_and_resume, 1, 0)
+IMPL_DBG_LEAK_RESUME(resume_send_err, 0, 1)
+IMPL_DBG_LEAK_RESUME(cancel_and_resume_send_err, 1, 1)
 
 static void
 test_dbg_leak_shutdown(void *env_)
@@ -1823,6 +1876,8 @@ end:
 		evdns_base_free(dns_base, 1);
 	if (server)
 		evdns_close_server_port(server);
+	if (base)
+		event_base_free(base);
 	if (fd >= 0)
 		evutil_closesocket(fd);
 }
@@ -1841,8 +1896,8 @@ struct testcase_t dns_testcases[] = {
 	{ "search", dns_search_test, TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
 	{ "search_cancel", dns_search_cancel_test,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
-	{ "retry", dns_retry_test, TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
-	{ "reissue", dns_reissue_test, TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
+	{ "retry", dns_retry_test, TT_FORK|TT_NEED_BASE|TT_NO_LOGS, &basic_setup, NULL },
+	{ "reissue", dns_reissue_test, TT_FORK|TT_NEED_BASE|TT_NO_LOGS, &basic_setup, NULL },
 	{ "inflight", dns_inflight_test, TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
 	{ "bufferevent_connect_hostname", test_bufferevent_connect_hostname,
 	  TT_FORK|TT_NEED_BASE, &basic_setup, NULL },
@@ -1855,6 +1910,14 @@ struct testcase_t dns_testcases[] = {
 #ifdef EVENT_SET_MEM_FUNCTIONS_IMPLEMENTED
 	{ "leak_shutdown", test_dbg_leak_shutdown, TT_FORK, &testleak_funcs, NULL },
 	{ "leak_cancel", test_dbg_leak_cancel, TT_FORK, &testleak_funcs, NULL },
+
+	{ "leak_resume", test_dbg_leak_resume_, TT_FORK, &testleak_funcs, NULL },
+	{ "leak_cancel_and_resume", test_dbg_leak_cancel_and_resume_,
+	  TT_FORK, &testleak_funcs, NULL },
+	{ "leak_resume_send_err", test_dbg_leak_resume_send_err_,
+	  TT_FORK, &testleak_funcs, NULL },
+	{ "leak_cancel_and_resume_send_err", test_dbg_leak_cancel_and_resume_send_err_,
+	  TT_FORK, &testleak_funcs, NULL },
 #endif
 
 	END_OF_TESTCASES

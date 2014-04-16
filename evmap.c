@@ -59,6 +59,7 @@ struct evmap_io {
 	struct event_dlist events;
 	ev_uint16_t nread;
 	ev_uint16_t nwrite;
+	ev_uint16_t nclose;
 };
 
 /* An entry for an evmap_signal list: notes all the events that want to know
@@ -255,6 +256,7 @@ evmap_io_init(struct evmap_io *entry)
 	LIST_INIT(&entry->events);
 	entry->nread = 0;
 	entry->nwrite = 0;
+	entry->nclose = 0;
 }
 
 
@@ -266,7 +268,7 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 	const struct eventop *evsel = base->evsel;
 	struct event_io_map *io = &base->io;
 	struct evmap_io *ctx = NULL;
-	int nread, nwrite, retval = 0;
+	int nread, nwrite, nclose, retval = 0;
 	short res = 0, old = 0;
 	struct event *old_ev;
 
@@ -286,11 +288,14 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 
 	nread = ctx->nread;
 	nwrite = ctx->nwrite;
+	nclose = ctx->nclose;
 
 	if (nread)
 		old |= EV_READ;
 	if (nwrite)
 		old |= EV_WRITE;
+	if (nclose)
+		old |= EV_CLOSED;
 
 	if (ev->ev_events & EV_READ) {
 		if (++nread == 1)
@@ -300,7 +305,11 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 		if (++nwrite == 1)
 			res |= EV_WRITE;
 	}
-	if (EVUTIL_UNLIKELY(nread > 0xffff || nwrite > 0xffff)) {
+	if (ev->ev_events & EV_CLOSED) {
+		if (++nclose == 1)
+			res |= EV_CLOSED;
+	}
+	if (EVUTIL_UNLIKELY(nread > 0xffff || nwrite > 0xffff || nclose > 0xffff)) {
 		event_warnx("Too many events reading or writing on fd %d",
 		    (int)fd);
 		return -1;
@@ -326,6 +335,7 @@ evmap_io_add_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 
 	ctx->nread = (ev_uint16_t) nread;
 	ctx->nwrite = (ev_uint16_t) nwrite;
+	ctx->nclose = (ev_uint16_t) nclose;
 	LIST_INSERT_HEAD(&ctx->events, ev, ev_io_next);
 
 	return (retval);
@@ -339,7 +349,7 @@ evmap_io_del_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 	const struct eventop *evsel = base->evsel;
 	struct event_io_map *io = &base->io;
 	struct evmap_io *ctx;
-	int nread, nwrite, retval = 0;
+	int nread, nwrite, nclose, retval = 0;
 	short res = 0, old = 0;
 
 	if (fd < 0)
@@ -356,11 +366,14 @@ evmap_io_del_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 
 	nread = ctx->nread;
 	nwrite = ctx->nwrite;
+	nclose = ctx->nclose;
 
 	if (nread)
 		old |= EV_READ;
 	if (nwrite)
 		old |= EV_WRITE;
+	if (nclose)
+		old |= EV_CLOSED;
 
 	if (ev->ev_events & EV_READ) {
 		if (--nread == 0)
@@ -372,16 +385,24 @@ evmap_io_del_(struct event_base *base, evutil_socket_t fd, struct event *ev)
 			res |= EV_WRITE;
 		EVUTIL_ASSERT(nwrite >= 0);
 	}
+	if (ev->ev_events & EV_CLOSED) {
+		if (--nclose == 0)
+			res |= EV_CLOSED;
+		EVUTIL_ASSERT(nclose >= 0);
+	}
 
 	if (res) {
 		void *extra = ((char*)ctx) + sizeof(struct evmap_io);
-		if (evsel->del(base, ev->ev_fd, old, res, extra) == -1)
-			return (-1);
-		retval = 1;
+		if (evsel->del(base, ev->ev_fd, old, res, extra) == -1) {
+			retval = -1;
+		} else {
+			retval = 1;
+		}
 	}
 
 	ctx->nread = nread;
 	ctx->nwrite = nwrite;
+	ctx->nclose = nclose;
 	LIST_REMOVE(ev, ev_io_next);
 
 	return (retval);
@@ -395,11 +416,13 @@ evmap_io_active_(struct event_base *base, evutil_socket_t fd, short events)
 	struct event *ev;
 
 #ifndef EVMAP_USE_HT
-	EVUTIL_ASSERT(fd < io->nentries);
+	if (fd < 0 || fd >= io->nentries)
+		return;
 #endif
 	GET_IO_SLOT(ctx, io, fd, evmap_io);
 
-	EVUTIL_ASSERT(ctx);
+	if (NULL == ctx)
+		return;
 	LIST_FOREACH(ev, &ctx->events, ev_io_next) {
 		if (ev->ev_events & events)
 			event_active_nolock_(ev, ev->ev_events & events, 1);
@@ -470,9 +493,12 @@ evmap_signal_active_(struct event_base *base, evutil_socket_t sig, int ncalls)
 	struct evmap_signal *ctx;
 	struct event *ev;
 
-	EVUTIL_ASSERT(sig < map->nentries);
+	if (sig < 0 || sig >= map->nentries)
+		return;
 	GET_SIGNAL_SLOT(ctx, map, sig, evmap_signal);
 
+	if (!ctx)
+		return;
 	LIST_FOREACH(ev, &ctx->events, ev_signal_next)
 		event_active_nolock_(ev, EV_SIGNAL, ncalls);
 }
@@ -580,8 +606,10 @@ evmap_io_reinit_iter_fn(struct event_base *base, evutil_socket_t fd,
 	extra = ((char*)ctx) + sizeof(struct evmap_io);
 	if (ctx->nread)
 		events |= EV_READ;
-	if (ctx->nread)
+	if (ctx->nwrite)
 		events |= EV_WRITE;
+	if (ctx->nclose)
+		events |= EV_CLOSED;
 	if (evsel->fdinfo_len)
 		memset(extra, 0, evsel->fdinfo_len);
 	if (events &&
@@ -849,6 +877,10 @@ event_changelist_add_(struct event_base *base, evutil_socket_t fd, short old, sh
 		change->write_change = EV_CHANGE_ADD |
 		    (events & (EV_ET|EV_PERSIST|EV_SIGNAL));
 	}
+	if (events & EV_CLOSED) {
+		change->close_change = EV_CHANGE_ADD |
+		    (events & (EV_ET|EV_PERSIST|EV_SIGNAL));
+	}
 
 	event_changelist_check(base);
 	return (0);
@@ -895,6 +927,12 @@ event_changelist_del_(struct event_base *base, evutil_socket_t fd, short old, sh
 		else
 			change->write_change = EV_CHANGE_DEL;
 	}
+	if (events & EV_CLOSED) {
+		if (!(change->old_events & EV_CLOSED))
+			change->close_change = 0;
+		else
+			change->close_change = EV_CHANGE_DEL;
+	}
 
 	event_changelist_check(base);
 	return (0);
@@ -908,7 +946,7 @@ evmap_io_check_integrity_fn(struct event_base *base, evutil_socket_t fd,
     struct evmap_io *io_info, void *arg)
 {
 	struct event *ev;
-	int n_read = 0, n_write = 0;
+	int n_read = 0, n_write = 0, n_close = 0;
 
 	/* First, make sure the list itself isn't corrupt. Otherwise,
 	 * running LIST_FOREACH could be an exciting adventure. */
@@ -918,15 +956,18 @@ evmap_io_check_integrity_fn(struct event_base *base, evutil_socket_t fd,
 		EVUTIL_ASSERT(ev->ev_flags & EVLIST_INSERTED);
 		EVUTIL_ASSERT(ev->ev_fd == fd);
 		EVUTIL_ASSERT(!(ev->ev_events & EV_SIGNAL));
-		EVUTIL_ASSERT((ev->ev_events & (EV_READ|EV_WRITE)));
+		EVUTIL_ASSERT((ev->ev_events & (EV_READ|EV_WRITE|EV_CLOSED)));
 		if (ev->ev_events & EV_READ)
 			++n_read;
 		if (ev->ev_events & EV_WRITE)
 			++n_write;
+		if (ev->ev_events & EV_CLOSED)
+			++n_close;
 	}
 
 	EVUTIL_ASSERT(n_read == io_info->nread);
 	EVUTIL_ASSERT(n_write == io_info->nwrite);
+	EVUTIL_ASSERT(n_close == io_info->nclose);
 
 	return 0;
 }
@@ -945,7 +986,7 @@ evmap_signal_check_integrity_fn(struct event_base *base,
 		EVUTIL_ASSERT(ev->ev_flags & EVLIST_INSERTED);
 		EVUTIL_ASSERT(ev->ev_fd == signum);
 		EVUTIL_ASSERT((ev->ev_events & EV_SIGNAL));
-		EVUTIL_ASSERT(!(ev->ev_events & (EV_READ|EV_WRITE)));
+		EVUTIL_ASSERT(!(ev->ev_events & (EV_READ|EV_WRITE|EV_CLOSED)));
 	}
 	return 0;
 }
