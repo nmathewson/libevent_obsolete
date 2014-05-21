@@ -198,6 +198,7 @@ main(int argc, char **argv)
 
 	SSL_CTX *ssl_ctx;
 	SSL *ssl;
+	X509_STORE *store;
 	struct bufferevent *bev;
 	struct evhttp_connection *evcon;
 	struct evhttp_request *req;
@@ -301,12 +302,10 @@ main(int argc, char **argv)
 	#ifndef _WIN32
 	/* TODO: Add certificate loading on Windows as well */
 
-	/* Attempt to use the system's trusted root certificates.
-	 * (This path is only valid for Debian-based systems.) */
-	if (1 != SSL_CTX_load_verify_locations(ssl_ctx,
-					       "/etc/ssl/certs/ca-certificates.crt",
-					       NULL))
-		die_openssl("SSL_CTX_load_verify_locations");
+	/* Attempt to use the system's trusted root certificates. */
+	store = SSL_CTX_get_cert_store(ssl_ctx);
+	X509_STORE_set_default_paths(store);
+
 	/* Ask OpenSSL to verify the server certificate.  Note that this
 	 * does NOT include verifying that the hostname is correct.
 	 * So, by itself, this means anyone with any legitimate
