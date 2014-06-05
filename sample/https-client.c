@@ -96,7 +96,8 @@ static void
 syntax(void)
 {
 	fputs("Syntax:\n", stderr);
-	fputs("   https-client -url <https-url> [-data data-file.bin] [-ignore-cert]\n", stderr);
+	fputs("   https-client -url <https-url> [-data data-file.bin] "
+			      "[-ignore-cert] [-pem pem-file]\n", stderr);
 	fputs("Example:\n", stderr);
 	fputs("   https-client -url https://ip.appspot.com/\n", stderr);
 
@@ -191,13 +192,14 @@ main(int argc, char **argv)
 	int r;
 
 	struct evhttp_uri *http_uri;
-	const char *url = NULL, *data_file = NULL;
+	const char *url = NULL, *data_file = NULL, *pem_file = NULL;
 	const char *scheme, *host, *path, *query;
 	char uri[256];
 	int port;
 
 	SSL_CTX *ssl_ctx;
 	SSL *ssl;
+	X509_STORE *store;
 	struct bufferevent *bev;
 	struct evhttp_connection *evcon;
 	struct evhttp_request *req;
@@ -218,6 +220,12 @@ main(int argc, char **argv)
 		} else if (!strcmp("-data", argv[i])) {
 			if (i < argc - 1) {
 				data_file = argv[i + 1];
+			} else {
+				syntax();
+			}
+		} else if (!strcmp("-pem", argv[i])) {
+			if (i < argc - 1) {
+				pem_file = argv[i + 1];
 			} else {
 				syntax();
 			}
@@ -301,12 +309,22 @@ main(int argc, char **argv)
 	#ifndef _WIN32
 	/* TODO: Add certificate loading on Windows as well */
 
-	/* Attempt to use the system's trusted root certificates.
-	 * (This path is only valid for Debian-based systems.) */
-	if (1 != SSL_CTX_load_verify_locations(ssl_ctx,
-					       "/etc/ssl/certs/ca-certificates.crt",
-					       NULL))
-		die_openssl("SSL_CTX_load_verify_locations");
+	/* Attempt to use the system's trusted root certificates. */
+	store = SSL_CTX_get_cert_store(ssl_ctx);
+	X509_STORE_set_default_paths(store);
+
+	if (pem_file != NULL) {
+		r = SSL_CTX_use_certificate_chain_file(ssl_ctx, pem_file);
+		if (r != 1) {
+			die_openssl("cert_file");
+		}
+
+		r = SSL_CTX_use_PrivateKey_file(ssl_ctx, pem_file, SSL_FILETYPE_PEM);
+		if (r != 1) {
+			die_openssl("priv_key_file");
+		}
+	}
+
 	/* Ask OpenSSL to verify the server certificate.  Note that this
 	 * does NOT include verifying that the hostname is correct.
 	 * So, by itself, this means anyone with any legitimate
@@ -348,6 +366,17 @@ main(int argc, char **argv)
 
 	// Set hostname for SNI extension
 	SSL_set_tlsext_host_name(ssl, host);
+
+	if (pem_file != NULL) {
+		X509 *ssl_cert = SSL_get_certificate(ssl);
+		if (ssl_cert == NULL) {
+			die_openssl("failed to get certificate");
+		}
+		if (SSL_CTX_check_private_key(ssl_ctx) != 1) {
+			die_openssl("key_file");
+		}
+		printf("Loaded private key and certificate at %s\n", pem_file);
+	}
 
 	if (strcasecmp(scheme, "http") == 0) {
 		bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
