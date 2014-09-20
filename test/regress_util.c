@@ -179,10 +179,10 @@ regress_ipv6_parse(void *ptr)
 		for (j = 0; j < 4; ++j) {
 			/* Can't use s6_addr32 here; some don't have it. */
 			ev_uint32_t u =
-				(in6.s6_addr[j*4  ] << 24) |
-				(in6.s6_addr[j*4+1] << 16) |
-				(in6.s6_addr[j*4+2] << 8) |
-				(in6.s6_addr[j*4+3]);
+			    ((ev_uint32_t)in6.s6_addr[j*4  ] << 24) |
+			    ((ev_uint32_t)in6.s6_addr[j*4+1] << 16) |
+			    ((ev_uint32_t)in6.s6_addr[j*4+2] << 8) |
+			    ((ev_uint32_t)in6.s6_addr[j*4+3]);
 			if (u != ent->res[j]) {
 				TT_FAIL(("%s did not parse as expected.", ent->addr));
 				continue;
@@ -432,6 +432,43 @@ test_evutil_casecmp(void *ptr)
 	tt_int_op(evutil_ascii_strncasecmp("Z", "qrst", 1), >, 0);
 end:
 	;
+}
+
+static void
+test_evutil_rtrim(void *ptr)
+{
+#define TEST_TRIM(s, result) \
+	do {						\
+	    if (cp) mm_free(cp);			\
+	    cp = mm_strdup(s);				\
+	    tt_assert(cp);				\
+	    evutil_rtrim_lws_(cp);			\
+	    tt_str_op(cp, ==, result);			\
+	} while(0)
+
+	char *cp = NULL;
+	(void) ptr;
+
+	TEST_TRIM("", "");
+	TEST_TRIM("a", "a");
+	TEST_TRIM("abcdef ghi", "abcdef ghi");
+
+	TEST_TRIM(" ", "");
+	TEST_TRIM("  ", "");
+	TEST_TRIM("a ", "a");
+	TEST_TRIM("abcdef  gH       ", "abcdef  gH");
+
+	TEST_TRIM("\t\t", "");
+	TEST_TRIM(" \t", "");
+	TEST_TRIM("\t", "");
+	TEST_TRIM("a \t", "a");
+	TEST_TRIM("a\t ", "a");
+	TEST_TRIM("a\t", "a");
+	TEST_TRIM("abcdef  gH    \t  ", "abcdef  gH");
+
+end:
+	if (cp)
+		mm_free(cp);
 }
 
 static int logsev = 0;
@@ -689,46 +726,48 @@ test_evutil_integers(void *arg)
 	tt_assert(u64 > 0);
 	tt_assert(i64 > 0);
 	u64++;
-	i64++;
+/*	i64++; */
 	tt_assert(u64 == 0);
-	tt_assert(i64 == EV_INT64_MIN);
-	tt_assert(i64 < 0);
+/*	tt_assert(i64 == EV_INT64_MIN); */
+/*	tt_assert(i64 < 0); */
 
 	u32 = EV_UINT32_MAX;
 	i32 = EV_INT32_MAX;
 	tt_assert(u32 > 0);
 	tt_assert(i32 > 0);
 	u32++;
-	i32++;
+/*	i32++; */
 	tt_assert(u32 == 0);
-	tt_assert(i32 == EV_INT32_MIN);
-	tt_assert(i32 < 0);
+/*	tt_assert(i32 == EV_INT32_MIN); */
+/*	tt_assert(i32 < 0); */
 
 	u16 = EV_UINT16_MAX;
 	i16 = EV_INT16_MAX;
 	tt_assert(u16 > 0);
 	tt_assert(i16 > 0);
 	u16++;
-	i16++;
+/*	i16++; */
 	tt_assert(u16 == 0);
-	tt_assert(i16 == EV_INT16_MIN);
-	tt_assert(i16 < 0);
+/*	tt_assert(i16 == EV_INT16_MIN); */
+/* 	tt_assert(i16 < 0); */
 
 	u8 = EV_UINT8_MAX;
 	i8 = EV_INT8_MAX;
 	tt_assert(u8 > 0);
 	tt_assert(i8 > 0);
 	u8++;
-	i8++;
+/*	i8++;*/
 	tt_assert(u8 == 0);
-	tt_assert(i8 == EV_INT8_MIN);
-	tt_assert(i8 < 0);
+/*	tt_assert(i8 == EV_INT8_MIN); */
+/*	tt_assert(i8 < 0); */
 
+/*
 	ssize = EV_SSIZE_MAX;
 	tt_assert(ssize > 0);
 	ssize++;
 	tt_assert(ssize < 0);
 	tt_assert(ssize == EV_SSIZE_MIN);
+*/
 
 	ptr = &ssize;
 	iptr = (ev_intptr_t)ptr;
@@ -1082,7 +1121,7 @@ end:
 static void
 test_evutil_loadsyslib(void *arg)
 {
-	HANDLE h=NULL;
+	HMODULE h=NULL;
 
 	h = evutil_load_windows_system_library_(TEXT("kernel32.dll"));
 	tt_assert(h);
@@ -1348,6 +1387,7 @@ struct testcase_t util_testcases[] = {
 	{ "evutil_snprintf", test_evutil_snprintf, 0, NULL, NULL },
 	{ "evutil_strtoll", test_evutil_strtoll, 0, NULL, NULL },
 	{ "evutil_casecmp", test_evutil_casecmp, 0, NULL, NULL },
+	{ "evutil_rtrim", test_evutil_rtrim, 0, NULL, NULL },
 	{ "strlcpy", test_evutil_strlcpy, 0, NULL, NULL },
 	{ "log", test_evutil_log, TT_FORK, NULL, NULL },
 	{ "upcast", test_evutil_upcast, 0, NULL, NULL },

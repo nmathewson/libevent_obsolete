@@ -90,6 +90,8 @@
 #include "../iocp-internal.h"
 #include "../event-internal.h"
 
+struct evutil_weakrand_state test_weakrand_state;
+
 long
 timeval_msec_diff(const struct timeval *start, const struct timeval *end)
 {
@@ -371,6 +373,7 @@ struct testgroup_t testgroups[] = {
 	{ "main/", main_testcases },
 	{ "heap/", minheap_testcases },
 	{ "et/", edgetriggered_testcases },
+	{ "finalize/", finalize_testcases },
 	{ "evbuffer/", evbuffer_testcases },
 	{ "signal/", signal_testcases },
 	{ "util/", util_testcases },
@@ -403,6 +406,7 @@ const char *finetimetests[] = {
 	"+util/monotonic_res_precise",
 	"+util/monotonic_res_fallback",
 	"+thread/deferred_cb_skew",
+	"+http/connection_retry",
 	NULL
 };
 struct testlist_alias_t testaliases[] = {
@@ -411,6 +415,8 @@ struct testlist_alias_t testaliases[] = {
 	{ "fine_timing", finetimetests },
 	END_OF_ALIASES
 };
+
+int libevent_tests_running_in_debug_mode = 0;
 
 int
 main(int argc, const char **argv)
@@ -438,7 +444,17 @@ main(int argc, const char **argv)
 		evthread_enable_lock_debugging();
 #endif
 
+	if (getenv("EVENT_DEBUG_MODE")) {
+		event_enable_debug_mode();
+		libevent_tests_running_in_debug_mode = 1;
+	}
+	if (getenv("EVENT_DEBUG_LOGGING_ALL")) {
+		event_enable_debug_logging(EVENT_DBG_ALL);
+	}
+
 	tinytest_set_aliases(testaliases);
+
+	evutil_weakrand_seed_(&test_weakrand_state, 0);
 
 	if (tinytest_main(argc,argv,testgroups))
 		return 1;

@@ -5,7 +5,7 @@ dnl See LICENSE for copying information.
 dnl
 dnl Original version Dug Song <dugsong@monkey.org>
 
-AC_INIT(libevent,2.1.1-alpha-dev)
+AC_INIT(libevent,2.1.4-alpha-dev)
 AC_PREREQ(2.59)
 AC_CONFIG_SRCDIR(event.c)
 
@@ -13,8 +13,8 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE
 dnl AM_SILENT_RULES req. automake 1.11.  [no] defaults V=1
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
-AM_CONFIG_HEADER(config.h  evconfig-private.h:evconfig-private.h.in)
-AC_DEFINE(NUMERIC_VERSION, 0x02010101, [Numeric representation of the version])
+AC_CONFIG_HEADERS(config.h  evconfig-private.h:evconfig-private.h.in)
+AC_DEFINE(NUMERIC_VERSION, 0x02010401, [Numeric representation of the version])
 
 dnl Initialize prefix.
 if test "$prefix" = "NONE"; then
@@ -44,10 +44,15 @@ dnl the 'host' machine is where the resulting stuff runs.
 
 dnl Checks for programs.
 AM_PROG_CC_C_O
-AC_PROG_SED
 AC_PROG_INSTALL
 AC_PROG_LN_S
 # AC_PROG_MKDIR_P - $(MKDIR_P) should be defined by AM_INIT_AUTOMAKE
+
+# AC_PROG_SED is only available in Autoconf >= 2.59b; workaround for older
+# versions
+ifdef([AC_PROG_SED], [AC_PROG_SED], [
+AC_CHECK_PROGS(SED, [gsed sed])
+])
 
 AC_PROG_GCC_TRADITIONAL
 
@@ -106,6 +111,9 @@ AC_ARG_ENABLE([libevent-install],
 AC_ARG_ENABLE([libevent-regress],
      AS_HELP_STRING([--disable-libevent-regress, skip regress in make check]),
 	[], [enable_libevent_regress=yes])
+AC_ARG_ENABLE([samples],
+     AS_HELP_STRING([--disable-samples, skip building of sample programs]),
+	[], [enable_samples=yes])
 AC_ARG_ENABLE([function-sections],
      AS_HELP_STRING([--enable-function-sections, make static library allow smaller binaries with --gc-sections]),
 	[], [enable_function_sections=no])
@@ -116,12 +124,13 @@ AC_ARG_ENABLE([verbose-debug],
 
 AC_PROG_LIBTOOL
 
-dnl   Uncomment "AC_DISABLE_SHARED" to make shared librraries not get
+dnl   Uncomment "AC_DISABLE_SHARED" to make shared libraries not get
 dnl   built by default.  You can also turn shared libs on and off from
 dnl   the command line with --enable-shared and --disable-shared.
 dnl AC_DISABLE_SHARED
 AC_SUBST(LIBTOOL_DEPS)
 
+AM_CONDITIONAL([BUILD_SAMPLES], [test "$enable_samples" = "yes"])
 AM_CONDITIONAL([BUILD_REGRESS], [test "$enable_libevent_regress" = "yes"])
 
 dnl Checks for libraries.
@@ -335,7 +344,6 @@ AC_CHECK_FUNCS([ \
   getnameinfo \
   getprotobynumber \
   gettimeofday \
-  inet_aton \
   inet_ntop \
   inet_pton \
   issetugid \
@@ -362,6 +370,7 @@ AC_CHECK_FUNCS([ \
   usleep \
   vasprintf \
 ])
+AM_CONDITIONAL(STRLCPY_IMPL, [test x"$ac_cv_func_strlcpy" = xno])
 
 AC_CACHE_CHECK(
     [for getaddrinfo],
@@ -679,6 +688,14 @@ AC_CHECK_MEMBERS([struct in6_addr.s6_addr32, struct in6_addr.s6_addr16, struct s
 #endif
 ])
 
+AC_CHECK_TYPES([struct so_linger],
+[#define HAVE_SO_LINGER], ,
+[
+#ifdef HAVE_SYS_SOCKET_H
+#include <sys/socket.h>
+#endif
+])
+
 AC_MSG_CHECKING([for socklen_t])
 AC_TRY_COMPILE([
  #include <sys/types.h>
@@ -803,6 +820,15 @@ if test x$enable_gcc_warnings != xno && test "$GCC" = "yes"; then
     # Disable the unused-function warnings, because these trigger
     # for minheap-internal.h related code.
     CFLAGS="$CFLAGS -Wno-unused-function"
+
+    # clang on macosx emits warnigns for each directory specified which
+    # isn't "used" generating a lot of build noise (typically 3 warnings
+    # per file
+    case "$host_os" in
+        darwin*)
+            CFLAGS="$CFLAGS -Qunused-arguments"
+        ;;
+    esac
   fi
 
 ##This will break the world on some 64-bit architectures

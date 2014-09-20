@@ -37,6 +37,7 @@ extern "C" {
 extern struct testcase_t main_testcases[];
 extern struct testcase_t evtag_testcases[];
 extern struct testcase_t evbuffer_testcases[];
+extern struct testcase_t finalize_testcases[];
 extern struct testcase_t bufferevent_testcases[];
 extern struct testcase_t bufferevent_iocp_testcases[];
 extern struct testcase_t util_testcases[];
@@ -51,6 +52,10 @@ extern struct testcase_t ssl_testcases[];
 extern struct testcase_t listener_testcases[];
 extern struct testcase_t listener_iocp_testcases[];
 extern struct testcase_t thread_testcases[];
+
+extern struct evutil_weakrand_state test_weakrand_state;
+
+#define test_weakrand() (evutil_weakrand_(&test_weakrand_state))
 
 void regress_threads(void *);
 void test_bufferevent_zlib(void *);
@@ -77,6 +82,8 @@ extern const struct testcase_setup_t basic_setup;
 
 extern const struct testcase_setup_t legacy_setup;
 void run_legacy_test_fn(void *ptr);
+
+extern int libevent_tests_running_in_debug_mode;
 
 /* A couple of flags that basic/legacy_setup can support. */
 #define TT_NEED_SOCKETPAIR	TT_FIRST_USER_FLAG

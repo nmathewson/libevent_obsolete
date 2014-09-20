@@ -246,7 +246,7 @@ test_evbuffer(void *ptr)
 	if (memcmp(evbuffer_pullup(
 			   evb, -1), buffer, sizeof(buffer) / 2) != 0 ||
 	    memcmp(evbuffer_pullup(
-			   evb_two, -1), buffer, sizeof(buffer) != 0))
+			   evb_two, -1), buffer, sizeof(buffer)) != 0)
 		tt_abort_msg("Pullup did not preserve content");
 
 	evbuffer_validate(evb);
@@ -863,6 +863,10 @@ test_evbuffer_add_file(void *ptr)
 		evutil_closesocket(pair[0]);
 	if (pair[1] >= 0)
 		evutil_closesocket(pair[1]);
+	if (wev)
+		event_free(wev);
+	if (rev)
+		event_free(rev);
 	if (tmpfilename) {
 		unlink(tmpfilename);
 		free(tmpfilename);
@@ -888,15 +892,16 @@ test_evbuffer_file_segment_add_cleanup_cb(void* ptr)
 	char *tmpfilename = NULL;
 	int fd = -1;
 	struct evbuffer *evb = NULL;
-	struct evbuffer_file_segment *seg = NULL;
+	struct evbuffer_file_segment *seg = NULL, *segptr;
 	char const* arg = "token";
 
 	fd = regress_make_tmpfile("file_segment_test_file", 22, &tmpfilename);
+	tt_int_op(fd, >=, 0);
 
 	evb = evbuffer_new();
 	tt_assert(evb);
 
-	seg = evbuffer_file_segment_new(fd, 0, -1, 0);
+	segptr = seg = evbuffer_file_segment_new(fd, 0, -1, 0);
 	tt_assert(seg);
 
 	evbuffer_file_segment_add_cleanup_cb(
@@ -905,29 +910,27 @@ test_evbuffer_file_segment_add_cleanup_cb(void* ptr)
 	tt_assert(fd != -1);
 
 	tt_assert(evbuffer_add_file_segment(evb, seg, 0, -1)!=-1);
-	
+
 	evbuffer_validate(evb);
 
 	tt_int_op(file_segment_cleanup_cb_called_count, ==, 0);
 	evbuffer_file_segment_free(seg);
+	seg = NULL; /* Prevent double-free. */
 
 	tt_int_op(file_segment_cleanup_cb_called_count, ==, 0);
 	evbuffer_free(evb);
-	
+	evb = NULL; /* pevent double-free */
+
 	tt_int_op(file_segment_cleanup_cb_called_count, ==, 1);
-	tt_assert(file_segment_cleanup_cb_called_with == seg);
+	tt_assert(file_segment_cleanup_cb_called_with == segptr);
 	tt_assert(file_segment_cleanup_cb_called_with_flags == 0);
 	tt_assert(file_segment_cleanup_cb_called_with_arg == (void*)arg);
-	
-	seg = NULL;
-	evb = NULL;
 
 end:
-	
-	if(evb) 
-	  evbuffer_free(evb);
-	if(seg)
-	  evbuffer_file_segment_free(seg);
+	if (evb)
+		evbuffer_free(evb);
+	if (seg)
+		evbuffer_file_segment_free(seg);
 	if (tmpfilename) {
 		unlink(tmpfilename);
 		free(tmpfilename);
@@ -1535,9 +1538,9 @@ test_evbuffer_callbacks(void *ptr)
 	tt_assert(!evbuffer_remove_cb(buf, log_change_callback, buf_out2));
 	evbuffer_validate(buf);
 
-	tt_str_op(evbuffer_pullup(buf_out1, -1), ==,
+	tt_str_op((const char *) evbuffer_pullup(buf_out1, -1), ==,
 		  "0->36; 36->26; 26->31; 31->38; ");
-	tt_str_op(evbuffer_pullup(buf_out2, -1), ==,
+	tt_str_op((const char *) evbuffer_pullup(buf_out2, -1), ==,
 		  "0->36; 31->38; 38->0; 0->1; ");
 	evbuffer_drain(buf_out1, evbuffer_get_length(buf_out1));
 	evbuffer_drain(buf_out2, evbuffer_get_length(buf_out2));
@@ -1553,7 +1556,7 @@ test_evbuffer_callbacks(void *ptr)
 	tt_uint_op(evbuffer_get_length(buf_out2), ==, 0);
 	evbuffer_setcb(buf, NULL, NULL);
 	evbuffer_add_printf(buf, "This will not.");
-	tt_str_op(evbuffer_pullup(buf, -1), ==, "This will not.");
+	tt_str_op((const char *) evbuffer_pullup(buf, -1), ==, "This will not.");
 	evbuffer_validate(buf);
 	evbuffer_drain(buf, evbuffer_get_length(buf));
 	evbuffer_validate(buf);
@@ -1661,7 +1664,7 @@ test_evbuffer_add_reference(void *ptr)
 	evbuffer_add(buf1, "You shake and shake the ", 24);
 	evbuffer_add_reference(buf1, "ketchup bottle", 14, ref_done_cb,
 	    (void*)3333);
-	evbuffer_add(buf1, ". Nothing comes and then a lot'll.", 42);
+	evbuffer_add(buf1, ". Nothing comes and then a lot'll.", 35);
 	evbuffer_free(buf1);
 	buf1 = NULL;
 	tt_int_op(ref_done_cb_called_count, ==, 3);
@@ -1809,6 +1812,7 @@ test_evbuffer_prepend(void *ptr)
 	evbuffer_prepend(buf1, "It is no longer true to say ", 28);
 	evbuffer_validate(buf1);
 	n = evbuffer_remove(buf1, tmp, sizeof(tmp)-1);
+	tt_int_op(n, >=, 0);
 	tmp[n]='\0';
 	tt_str_op(tmp,==,"It is no longer true to say it has 29 characters");
 
@@ -1827,6 +1831,7 @@ test_evbuffer_prepend(void *ptr)
 	evbuffer_validate(buf2);
 	evbuffer_validate(buf1);
 	n = evbuffer_remove(buf2, tmp, sizeof(tmp)-1);
+	tt_int_op(n, >=, 0);
 	tmp[n]='\0';
 	tt_str_op(tmp,==,"Here is string 1000. Here is string 999. ");
 
@@ -1999,7 +2004,7 @@ test_evbuffer_freeze(void *ptr)
 	FREEZE_EQ(r, 0, -1);
 	r = evbuffer_reserve_space(buf, 10, v, 1);
 	FREEZE_EQ(r, 1, -1);
-	if (r == 0) {
+	if (r == 1) {
 		memset(v[0].iov_base, 'X', 10);
 		v[0].iov_len = 10;
 	}
@@ -2095,7 +2100,7 @@ test_evbuffer_copyout(void *dummy)
 	    "When the rich Allobrogenses never kept amanuenses, "
 	    "And our only plots were piled in lakes at Berne.";
 	/* -- Kipling, "In The Neolithic Age" */
-	char tmp[256];
+	char tmp[1024];
 	struct evbuffer_ptr ptr;
 	struct evbuffer *buf;
 

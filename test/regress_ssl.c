@@ -24,6 +24,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// Get rid of OSX 10.7 and greater deprecation warnings.
+#if defined(__APPLE__) && defined(__clang__)
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -159,7 +164,7 @@ init_ssl(void)
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 	if (SSLeay() != OPENSSL_VERSION_NUMBER) {
-		TT_DECLARE("WARN", ("Version mismatch for openssl: compiled with %lx but running with %lx", OPENSSL_VERSION_NUMBER, SSLeay()));
+		TT_DECLARE("WARN", ("Version mismatch for openssl: compiled with %lx but running with %lx", (unsigned long)OPENSSL_VERSION_NUMBER, (unsigned long) SSLeay()));
 	}
 }
 
@@ -189,6 +194,7 @@ respond_to_number(struct bufferevent *bev, void *ctx)
 	n = atoi(line);
 	if (n <= 0)
 		TT_FAIL(("Bad number: %s", line));
+	free(line);
 	TT_BLATHER(("The number was %d", n));
 	if (n == 1001) {
 		++test_is_done;

@@ -79,21 +79,33 @@ extern "C" {
 
 #ifndef _WIN32
 
+#if EAGAIN == EWOULDBLOCK
+#define EVUTIL_ERR_IS_EAGAIN(e) \
+	((e) == EAGAIN)
+#else
+#define EVUTIL_ERR_IS_EAGAIN(e) \
+	((e) == EAGAIN || (e) == EWOULDBLOCK)
+#endif
+
 /* True iff e is an error that means a read/write operation can be retried. */
 #define EVUTIL_ERR_RW_RETRIABLE(e)				\
-	((e) == EINTR || (e) == EAGAIN)
+	((e) == EINTR || EVUTIL_ERR_IS_EAGAIN(e))
 /* True iff e is an error that means an connect can be retried. */
 #define EVUTIL_ERR_CONNECT_RETRIABLE(e)			\
 	((e) == EINTR || (e) == EINPROGRESS)
 /* True iff e is an error that means a accept can be retried. */
 #define EVUTIL_ERR_ACCEPT_RETRIABLE(e)			\
-	((e) == EINTR || (e) == EAGAIN || (e) == ECONNABORTED)
+	((e) == EINTR || EVUTIL_ERR_IS_EAGAIN(e) || (e) == ECONNABORTED)
 
 /* True iff e is an error that means the connection was refused */
 #define EVUTIL_ERR_CONNECT_REFUSED(e)					\
 	((e) == ECONNREFUSED)
 
 #else
+/* Win32 */
+
+#define EVUTIL_ERR_IS_EAGAIN(e) \
+	((e) == WSAEWOULDBLOCK || (e) == EAGAIN)
 
 #define EVUTIL_ERR_RW_RETRIABLE(e)					\
 	((e) == WSAEWOULDBLOCK ||					\
@@ -217,6 +229,11 @@ int EVUTIL_ISLOWER_(char c);
 int EVUTIL_ISUPPER_(char c);
 char EVUTIL_TOUPPER_(char c);
 char EVUTIL_TOLOWER_(char c);
+
+/** Remove all trailing horizontal whitespace (space or tab) from the end of a
+ * string */
+void evutil_rtrim_lws_(char *);
+
 
 /** Helper macro.  If we know that a given pointer points to a field in a
     structure, return a pointer to the structure itself.  Used to implement
@@ -375,7 +392,7 @@ void evutil_free_secure_rng_globals_(void);
 void evutil_free_globals_(void);
 
 #ifdef _WIN32
-HANDLE evutil_load_windows_system_library_(const TCHAR *library_name);
+HMODULE evutil_load_windows_system_library_(const TCHAR *library_name);
 #endif
 
 #ifndef EV_SIZE_FMT
@@ -426,6 +443,9 @@ HANDLE evutil_load_windows_system_library_(const TCHAR *library_name);
 evutil_socket_t evutil_socket_(int domain, int type, int protocol);
 evutil_socket_t evutil_accept4_(evutil_socket_t sockfd, struct sockaddr *addr,
     ev_socklen_t *addrlen, int flags);
+
+    /* used by one of the test programs.. */
+EVENT2_EXPORT_SYMBOL
 int evutil_make_internal_pipe_(evutil_socket_t fd[2]);
 evutil_socket_t evutil_eventfd_(unsigned initval, int flags);
 
@@ -450,6 +470,7 @@ evutil_socket_t evutil_eventfd_(unsigned initval, int flags);
 #define EVUTIL_EFD_CLOEXEC 0x8000
 #endif
 
+void evutil_memclear_(void *mem, size_t len);
 
 #ifdef __cplusplus
 }
