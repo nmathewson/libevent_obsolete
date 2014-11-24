@@ -359,7 +359,7 @@ main(int argc, char **argv)
 	#endif
 
 	if (strcasecmp(scheme, "http") == 0) {
-		bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
+		bev = bufferevent_socket_new(base, -1, 0);
 	} else {
 		bev = bufferevent_openssl_socket_new(base, -1, ssl,
 			BUFFEREVENT_SSL_CONNECTING,
