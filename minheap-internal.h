@@ -70,7 +70,7 @@ struct event* min_heap_top_(min_heap_t* s) { return s->n ? *s->p : 0; }
 
 int min_heap_push_(min_heap_t* s, struct event* e)
 {
-	if (min_heap_reserve_(s, s->n + 1))
+	if (e->ev_timeout_pos.min_heap_idx != -1 || min_heap_reserve_(s, s->n + 1))
 		return -1;
 	min_heap_shift_up_(s, s->n++, e);
 	return 0;
