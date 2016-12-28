@@ -103,13 +103,36 @@ evthread_posix_get_id(void)
 static void *
 evthread_posix_cond_alloc(unsigned condflags)
 {
+	pthread_condattr_t condattr;
 	pthread_cond_t *cond = mm_malloc(sizeof(pthread_cond_t));
 	if (!cond)
 		return NULL;
-	if (pthread_cond_init(cond, NULL)) {
+
+	if (pthread_condattr_init(&condattr) != 0) {
 		mm_free(cond);
 		return NULL;
 	}
+
+#if defined(HAVE_POSIX_MONOTONIC)
+	/*
+	 * By default, set the monotonic clock to be used, if available, for the
+	 * pthread condition. When using a pthread_cond_timedwait() call, there is
+	 * a race between the time clock acquisition and the wait period when using
+	 * a clock source that can jump backward or forward in time such as
+	 * gettimeofday or CLOCK_REALTIME. On example being a NTP adjustment done
+	 * during that race window.
+	 */
+	if (pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC) != 0) {
+		mm_free(cond);
+		return NULL;
+	}
+#endif /* HAVE_POSIX_MONOTONIC */
+
+	if (pthread_cond_init(cond, &condattr) != 0) {
+		mm_free(cond);
+		return NULL;
+	}
+
 	return cond;
 }
 
@@ -141,12 +164,21 @@ evthread_posix_cond_wait(void *cond_, void *lock_, const struct timeval *tv)
 	pthread_mutex_t *lock = lock_;
 
 	if (tv) {
+		/*
+		 * In case the the clock_gettime call fails, the timedwait should
+		 * return immediately having pretty low values.
+		 */
+		struct timespec ts = { 0, 0 };
+#if defined(HAVE_POSIX_MONOTONIC)
+		evutil_clock_gettime(CLOCK_MONOTONIC, &ts);
+		ts.tv_sec += tv->tv_sec;
+		ts.tv_nsec += tv->tv_usec;
+#else
 		struct timeval now, abstime;
-		struct timespec ts;
 		evutil_gettimeofday(&now, NULL);
 		evutil_timeradd(&now, tv, &abstime);
-		ts.tv_sec = abstime.tv_sec;
-		ts.tv_nsec = abstime.tv_usec*1000;
+		evutil_timeval_to_timespec(ts, &abstime);
+#endif /* HAVE_POSIX_MONOTONIC */
 		r = pthread_cond_timedwait(cond, lock, &ts);
 		if (r == ETIMEDOUT)
 			return 1;

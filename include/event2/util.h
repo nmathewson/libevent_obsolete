@@ -502,6 +502,27 @@ const char *evutil_socket_error_to_string(int errcode);
 #define evutil_socket_error_to_string(errcode) (strerror(errcode))
 #endif
 
+/**
+ * @name Macros for converting between timeval and timespec
+ *
+ * Taken from libc time.h for the fallback. Having the timeradd defined
+ * implies that those macros are available from libc.
+ */
+#ifdef EVENT__HAVE_TIMERADD
+#define evutil_timeval_to_timespec(tv, ts) TIMEVAL_TO_TIMESPEC(tv, ts)
+#define evutil_timespec_to_timeval(tv, ts) TIMESPEC_TO_TIMEVAL(tv, ts)
+#else /* EVENT__HAVE_TIMERADD */
+#define evutil_timeval_to_timespec(tv, ts)     \
+	do {                                       \
+		(ts)->tv_sec = (tv)->tv_sec;           \
+		(ts)->tv_nsec = (tv)->tv_usec * 1000;  \
+	} while (0)
+#define evutil_timespec_to_timeval(tv, ts)     \
+	do {                                       \
+		(tv)->tv_sec = (ts)->tv_sec;           \
+		(tv)->tv_usec = (ts)->tv_nsec / 1000;  \
+	} while (0)
+#endif /* EVENT__HAVE_TIMERADD */
 
 /**
  * @name Manipulation macros for struct timeval.
@@ -574,6 +595,15 @@ ev_int64_t evutil_strtoll(const char *s, char **endptr, int base);
 struct timezone;
 EVENT2_EXPORT_SYMBOL
 int evutil_gettimeofday(struct timeval *tv, struct timezone *tz);
+#endif
+
+#ifdef EVENT__HAVE_CLOCK_GETTIME
+#define evutil_clock_gettime(clockid, tp) clock_gettime((clockid), (tp))
+#else
+/* libc defines it to a __S32_TYPE which is a int */
+typedef int clockid_t;
+struct timespec;
+int evutil_clock_gettime(clockid_t clk_id, struct timespec *tp);
 #endif
 
 /** Replacement for snprintf to get consistent behavior on platforms for
