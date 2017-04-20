@@ -159,6 +159,9 @@ struct evhttp_bound_socket *evhttp_bind_listener(struct evhttp *http, struct evc
 EVENT2_EXPORT_SYMBOL
 struct evconnlistener *evhttp_bound_socket_get_listener(struct evhttp_bound_socket *bound);
 
+EVENT2_EXPORT_SYMBOL
+void evhttp_get_request(struct evhttp *, evutil_socket_t, struct sockaddr *, ev_socklen_t);
+
 typedef void evhttp_bound_socket_foreach_fn(struct evhttp_bound_socket *, void *);
 /**
  * Applies the function specified in the first argument to all
