@@ -41,7 +41,7 @@ struct evsig_info {
 	struct event ev_signal;
 	/* Socketpair used to send notifications from the signal handler */
 	evutil_socket_t ev_signal_pair[2];
-	/* True iff we've added the ev_signal event yet. */
+	/* True if we've added the ev_signal event yet. */
 	int ev_signal_added;
 	/* Count of the number of signals we're currently watching. */
 	int ev_n_signals_added;
