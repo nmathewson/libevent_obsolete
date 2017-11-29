@@ -2882,8 +2882,9 @@ evhttp_send_reply_chunk(struct evhttp_request *req, struct evbuffer *databuf)
 {
 	evhttp_send_reply_chunk_with_cb(req, databuf, NULL, NULL);
 }
+
 void
-evhttp_send_reply_end(struct evhttp_request *req)
+evhttp_send_reply_end_trailers(struct evhttp_request *req, struct evkeyvalq *trailers)
 {
 	struct evhttp_connection *evcon = req->evcon;
 	struct evbuffer *output;
@@ -2899,7 +2900,15 @@ evhttp_send_reply_end(struct evhttp_request *req)
 	req->userdone = 1;
 
 	if (req->chunked) {
-		evbuffer_add(output, "0\r\n\r\n", 5);
+		evbuffer_add(output, "0\r\n", 3);
+		if (trailers) {
+			struct evkeyval *trailer;
+			TAILQ_FOREACH(trailer, trailers, next) {
+				evbuffer_add_printf(output, "%s: %s\r\n",
+				    trailer->key, trailer->value);
+			}
+		}
+		evbuffer_add(output, "\r\n", 2);
 		evhttp_write_buffer(req->evcon, evhttp_send_done, NULL);
 		req->chunked = 0;
 	} else if (evbuffer_get_length(output) == 0) {
@@ -2910,6 +2919,12 @@ evhttp_send_reply_end(struct evhttp_request *req)
 		evcon->cb = evhttp_send_done;
 		evcon->cb_arg = NULL;
 	}
+}
+
+void
+evhttp_send_reply_end(struct evhttp_request *req)
+{
+	evhttp_send_reply_end_trailers(req, NULL);
 }
 
 static const char *informational_phrases[] = {

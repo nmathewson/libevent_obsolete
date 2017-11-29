@@ -489,6 +489,15 @@ void evhttp_send_reply_chunk_with_cb(struct evhttp_request *, struct evbuffer *,
     void (*cb)(struct evhttp_connection *, void *), void *arg);
 
 /**
+   Complete a chunked reply with trailers, freeing the request as appropriate.
+
+   @param req a request object
+   @param trailers the evkeyvalq object in which to find the trailers
+*/
+void
+evhttp_send_reply_end_trailers(struct evhttp_request *req, struct evkeyvalq *trailers);
+
+/**
    Complete a chunked reply, freeing the request as appropriate.
 
    @param req a request object
