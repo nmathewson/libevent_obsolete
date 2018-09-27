@@ -8,6 +8,8 @@
 [![Travis Build Status](https://travis-ci.org/libevent/libevent.svg?branch=master)](https://travis-ci.org/libevent/libevent)
 [![Coverage Status](https://coveralls.io/repos/github/libevent/libevent/badge.svg)](https://coveralls.io/github/libevent/libevent)
 [![Join the chat at https://gitter.im/libevent/libevent](https://badges.gitter.im/libevent/libevent.svg)](https://gitter.im/libevent/libevent?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Code Quality: Cpp](https://img.shields.io/lgtm/grade/cpp/g/nmathewson/Libevent.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/nmathewson/Libevent/context:cpp)
+[![Total Alerts](https://img.shields.io/lgtm/alerts/g/nmathewson/Libevent.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/nmathewson/Libevent/alerts)
 
 
 
