@@ -409,4 +409,4 @@ fixing bugs:
  * Philip Prindeville
  * Vis Virial
 
-If we have forgotten your name, please contact us.
+If we have forgotten your name, please contact us..
